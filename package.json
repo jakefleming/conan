@@ -1,0 +1,8 @@
+{
+  "name": "context-annotator",
+  "version": "0.1.0",
+  "scripts": {
+    "start": "bun run server.ts"
+  },
+  "dependencies": {}
+}

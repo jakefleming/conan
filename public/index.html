@@ -1,0 +1,1560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Context Annotator</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0a0a0a;
+    --surface: #141414;
+    --surface-2: #1e1e1e;
+    --border: #2a2a2a;
+    --text: #e5e5e5;
+    --text-muted: #888;
+    --accent: #3b82f6;
+    --accent-hover: #2563eb;
+    --green: #22c55e;
+    --yellow: #eab308;
+    --red: #ef4444;
+    --radius: 8px;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* ── Top Bar ── */
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    height: 56px;
+  }
+  .topbar-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+  .topbar-logo {
+    font-weight: 700;
+    font-size: 14px;
+    white-space: nowrap;
+    letter-spacing: -0.02em;
+  }
+  .topbar-folder {
+    font-size: 12px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .topbar-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .progress-text {
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  .btn {
+    padding: 6px 14px;
+    border: none;
+    border-radius: var(--radius);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .btn-primary {
+    background: var(--accent);
+    color: white;
+  }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-ghost {
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+  }
+  .btn-ghost:hover { background: var(--surface-2); color: var(--text); }
+
+  /* ── Overview Grid ── */
+  .overview {
+    padding: 20px;
+    height: calc(100vh - 56px);
+    overflow-y: auto;
+  }
+  .filter-bar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .filter-btn {
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .filter-btn.active {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+  }
+  .filter-btn:hover:not(.active) { background: var(--surface-2); }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 12px;
+  }
+  .grid-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    cursor: pointer;
+    transition: border-color 0.15s, transform 0.1s;
+    position: relative;
+  }
+  .grid-item:hover {
+    border-color: var(--accent);
+    transform: translateY(-1px);
+  }
+  .grid-thumb {
+    width: 100%;
+    aspect-ratio: 1;
+    object-fit: cover;
+    display: block;
+    background: var(--surface-2);
+  }
+  .grid-thumb-placeholder {
+    width: 100%;
+    aspect-ratio: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--surface-2);
+    color: var(--text-muted);
+    font-size: 28px;
+  }
+  .grid-info {
+    padding: 8px 10px;
+  }
+  .grid-name {
+    font-size: 11px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .grid-meta {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+  .status-dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    margin-right: 4px;
+    vertical-align: middle;
+  }
+  .status-dot.pending { background: var(--yellow); }
+  .status-dot.annotated { background: var(--green); }
+  .status-dot.skipped { background: var(--text-muted); }
+
+  /* ── Gallery Mode ── */
+  .gallery {
+    display: none;
+    height: calc(100vh - 56px);
+  }
+  .gallery.active { display: flex; }
+
+  .gallery-preview {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: var(--bg);
+    position: relative;
+    min-width: 0;
+  }
+  .gallery-preview img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    border-radius: 4px;
+  }
+  .gallery-preview .file-placeholder {
+    text-align: center;
+    color: var(--text-muted);
+  }
+  .gallery-preview .file-placeholder .icon { font-size: 64px; margin-bottom: 12px; }
+  .gallery-preview .file-placeholder .name { font-size: 16px; }
+
+  .gallery-nav {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.1);
+    border: none;
+    color: white;
+    font-size: 18px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s;
+    backdrop-filter: blur(8px);
+  }
+  .gallery-nav:hover { background: rgba(255,255,255,0.2); }
+  .gallery-nav.prev { left: 16px; }
+  .gallery-nav.next { right: 16px; }
+
+  /* ── Sidebar ── */
+  .gallery-sidebar {
+    width: 380px;
+    min-width: 380px;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+  }
+  .sidebar-header {
+    padding: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .sidebar-filename {
+    font-size: 14px;
+    font-weight: 600;
+    word-break: break-all;
+  }
+  .sidebar-position {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 4px;
+  }
+  .sidebar-progress {
+    width: 100%;
+    height: 2px;
+    background: var(--border);
+    margin-top: 10px;
+    border-radius: 1px;
+  }
+  .sidebar-progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 1px;
+    transition: width 0.3s;
+  }
+
+  .comments-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 16px;
+  }
+  .comment {
+    margin-bottom: 12px;
+    padding: 10px 12px;
+    border-radius: var(--radius);
+    background: var(--surface-2);
+    position: relative;
+    group: true;
+  }
+  .comment:hover .comment-delete { opacity: 1; }
+  .comment-author {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 4px;
+  }
+  .comment-author.user { color: var(--accent); }
+  .comment-author.claude { color: var(--green); }
+  .comment-text {
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+  }
+  .comment-time {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 4px;
+  }
+  .comment-delete {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    opacity: 0;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: opacity 0.15s, color 0.15s;
+  }
+  .comment-delete:hover { color: var(--red); }
+
+  .no-comments {
+    color: var(--text-muted);
+    font-size: 13px;
+    text-align: center;
+    padding: 32px 16px;
+  }
+
+  .sidebar-input {
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+  }
+  .input-row {
+    display: flex;
+    gap: 8px;
+  }
+  .comment-input {
+    flex: 1;
+    padding: 10px 12px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-size: 13px;
+    font-family: inherit;
+    resize: none;
+    min-height: 40px;
+    max-height: 120px;
+  }
+  .comment-input:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .comment-input::placeholder { color: var(--text-muted); }
+
+  .btn-mic {
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text-muted);
+    font-size: 18px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+    align-self: flex-end;
+  }
+  .btn-mic:hover { border-color: var(--text-muted); color: var(--text); }
+  .btn-mic.recording {
+    background: var(--red);
+    border-color: var(--red);
+    color: white;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+    50% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+  }
+  .voice-status {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 4px;
+    min-height: 16px;
+  }
+  .voice-status.recording { color: var(--red); }
+
+  .sidebar-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .sidebar-actions .btn { flex: 1; }
+
+  .btn-skip {
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+  }
+  .btn-skip:hover { background: var(--surface-2); color: var(--text); }
+  .btn-next {
+    background: var(--accent);
+    color: white;
+  }
+  .btn-next:hover { background: var(--accent-hover); }
+
+  .btn-claude {
+    background: var(--green);
+    color: #000;
+    font-weight: 600;
+  }
+  .btn-claude:hover { background: #16a34a; }
+  .btn-claude:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-claude.loading { animation: pulse 1s ease-in-out infinite; }
+
+  /* ── Settings Modal ── */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+  }
+  .modal-overlay.active { display: flex; }
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    width: 420px;
+    max-width: 90vw;
+  }
+  .modal h3 { font-size: 16px; margin-bottom: 16px; }
+  .modal-field { margin-bottom: 12px; }
+  .modal-field label {
+    display: block;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+  }
+  .modal-field input {
+    width: 100%;
+    padding: 8px 10px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-size: 13px;
+    font-family: monospace;
+  }
+  .modal-field input:focus { outline: none; border-color: var(--accent); }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+  .modal-status {
+    font-size: 12px;
+    color: var(--green);
+    margin-bottom: 8px;
+  }
+
+  /* ── Summary Siderail ── */
+  .overview-container {
+    display: flex;
+    height: calc(100vh - 56px);
+  }
+  .overview-container .overview {
+    flex: 1;
+    min-width: 0;
+    height: auto;
+    overflow-y: auto;
+  }
+  .overview-container.hidden { display: none; }
+  .summary-siderail {
+    width: 420px;
+    min-width: 420px;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    display: none;
+    flex-direction: column;
+    height: calc(100vh - 56px);
+  }
+  .summary-siderail.active { display: flex; }
+  .summary-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .summary-header-title {
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .summary-header-actions {
+    display: flex;
+    gap: 6px;
+  }
+  .summary-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+  }
+  .summary-rendered {
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text);
+  }
+  .summary-rendered h1 { font-size: 18px; margin: 0 0 12px 0; font-weight: 700; }
+  .summary-rendered h2 { font-size: 15px; margin: 16px 0 8px 0; font-weight: 600; color: var(--text); }
+  .summary-rendered h3 { font-size: 14px; margin: 12px 0 6px 0; font-weight: 600; }
+  .summary-rendered p { margin: 0 0 8px 0; }
+  .summary-rendered ul, .summary-rendered ol { margin: 0 0 8px 0; padding-left: 20px; }
+  .summary-rendered li { margin-bottom: 4px; }
+  .summary-rendered code {
+    background: var(--surface-2);
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 12px;
+  }
+  .summary-rendered pre {
+    background: var(--surface-2);
+    padding: 12px;
+    border-radius: var(--radius);
+    overflow-x: auto;
+    margin: 0 0 8px 0;
+  }
+  .summary-rendered pre code { background: none; padding: 0; }
+
+  /* ── Summary reference links ── */
+  .summary-rendered a.ref-comment,
+  .summary-rendered a.ref-image {
+    color: var(--accent);
+    text-decoration: none;
+    cursor: pointer;
+    border-bottom: 1px dotted var(--accent);
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .summary-rendered a.ref-comment:hover,
+  .summary-rendered a.ref-image:hover {
+    color: var(--accent-hover);
+    border-bottom-color: var(--accent-hover);
+  }
+  .summary-rendered a.ref-comment::before {
+    content: '\01F4AC\00A0';
+    font-size: 11px;
+  }
+  .summary-rendered a.ref-image::before {
+    content: '\01F5BC\00A0';
+    font-size: 11px;
+  }
+  .ref-error-tooltip {
+    position: fixed;
+    background: var(--red);
+    color: white;
+    padding: 6px 12px;
+    border-radius: var(--radius);
+    font-size: 12px;
+    z-index: 200;
+    pointer-events: none;
+    animation: refFadeOut 2s forwards;
+  }
+  @keyframes refFadeOut {
+    0%, 70% { opacity: 1; }
+    100% { opacity: 0; }
+  }
+  .comment.highlight-flash {
+    animation: commentFlash 1.5s ease-out;
+  }
+  @keyframes commentFlash {
+    0% { background: var(--accent); }
+    100% { background: var(--surface-2); }
+  }
+  .summary-editor {
+    width: 100%;
+    height: 100%;
+    background: var(--bg);
+    border: none;
+    color: var(--text);
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    padding: 16px;
+    resize: none;
+    outline: none;
+  }
+  .summary-empty {
+    color: var(--text-muted);
+    font-size: 13px;
+    text-align: center;
+    padding: 40px 20px;
+  }
+  .summary-footer {
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .summary-footer .btn { flex: 0 0 auto; }
+  .version-nav {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .version-btn {
+    padding: 2px 8px !important;
+    font-size: 16px !important;
+    line-height: 1;
+    min-width: 28px;
+  }
+  .version-btn:disabled {
+    opacity: 0.3;
+    cursor: default;
+  }
+  .version-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    user-select: none;
+  }
+
+  /* ── Keyboard hint ── */
+  .kbd-hints {
+    padding: 8px 16px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+  }
+  .kbd-hint {
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+  kbd {
+    display: inline-block;
+    padding: 1px 5px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    font-size: 10px;
+    font-family: inherit;
+    margin-right: 2px;
+  }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/marked@14/marked.min.js"></script>
+</head>
+<body>
+
+<!-- Top Bar -->
+<div class="topbar">
+  <div class="topbar-left">
+    <span class="topbar-logo">Context Annotator</span>
+    <span class="topbar-folder" id="folder-path">Loading...</span>
+  </div>
+  <div class="topbar-right">
+    <span class="progress-text" id="progress-text"></span>
+    <button class="btn btn-ghost" id="btn-toggle-summary">Summary</button>
+    <button class="btn btn-primary" id="btn-add-context">Add Context</button>
+    <button class="btn btn-ghost" id="btn-back" style="display:none">Back to Grid</button>
+    <button class="btn btn-ghost" id="btn-settings" title="Settings">&#9881;</button>
+  </div>
+</div>
+
+<!-- Overview + Summary Siderail Container -->
+<div class="overview-container" id="overview-container">
+  <div class="overview" id="overview">
+    <div class="filter-bar">
+      <button class="filter-btn active" data-filter="all">All</button>
+      <button class="filter-btn" data-filter="pending">Pending</button>
+      <button class="filter-btn" data-filter="annotated">Annotated</button>
+      <button class="filter-btn" data-filter="skipped">Skipped</button>
+    </div>
+    <div class="grid" id="grid"></div>
+  </div>
+  <div class="summary-siderail" id="summary-siderail">
+    <div class="summary-header">
+      <span class="summary-header-title">Summary</span>
+      <div class="summary-header-actions">
+        <button class="btn btn-ghost" id="btn-summary-edit" style="padding:4px 10px;font-size:12px">Edit</button>
+        <button class="btn btn-ghost" id="btn-summary-copy" style="padding:4px 10px;font-size:12px">Copy</button>
+      </div>
+    </div>
+    <div class="summary-content" id="summary-content">
+      <div class="summary-empty">No summary yet. Click "Generate" to create one.</div>
+    </div>
+    <div class="summary-footer">
+      <div class="version-nav" id="version-nav" style="display:none">
+        <button class="btn btn-ghost version-btn" id="btn-version-prev" title="Previous version">&lsaquo;</button>
+        <span class="version-label" id="version-label">v1 of 1</span>
+        <button class="btn btn-ghost version-btn" id="btn-version-next" title="Next version">&rsaquo;</button>
+      </div>
+      <button class="btn btn-primary" id="btn-generate-summary">Generate</button>
+    </div>
+  </div>
+</div>
+
+<!-- Gallery Mode -->
+<div class="gallery" id="gallery">
+  <div class="gallery-preview" id="preview-area">
+    <button class="gallery-nav prev" id="nav-prev">&#8249;</button>
+    <div id="preview-content"></div>
+    <button class="gallery-nav next" id="nav-next">&#8250;</button>
+  </div>
+  <div class="gallery-sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-filename" id="sidebar-filename"></div>
+      <div class="sidebar-position" id="sidebar-position"></div>
+      <div class="sidebar-progress"><div class="sidebar-progress-fill" id="sidebar-progress-fill"></div></div>
+    </div>
+    <div class="comments-list" id="comments-list"></div>
+    <div class="sidebar-input">
+      <div class="input-row">
+        <textarea class="comment-input" id="comment-input" placeholder="Add your context..." rows="2"></textarea>
+        <button class="btn-mic" id="btn-mic" title="Voice input"><svg width="18" height="18" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M16 22C17.5908 21.9983 19.116 21.3657 20.2408 20.2408C21.3657 19.116 21.9983 17.5908 22 16V8C22 6.4087 21.3679 4.88258 20.2426 3.75736C19.1174 2.63214 17.5913 2 16 2C14.4087 2 12.8826 2.63214 11.7574 3.75736C10.6321 4.88258 10 6.4087 10 8V16C10.0017 17.5908 10.6343 19.116 11.7592 20.2408C12.884 21.3657 14.4092 21.9983 16 22ZM12 8C12 6.93913 12.4214 5.92172 13.1716 5.17157C13.9217 4.42143 14.9391 4 16 4C17.0609 4 18.0783 4.42143 18.8284 5.17157C19.5786 5.92172 20 6.93913 20 8V16C20 17.0609 19.5786 18.0783 18.8284 18.8284C18.0783 19.5786 17.0609 20 16 20C14.9391 20 13.9217 19.5786 13.1716 18.8284C12.4214 18.0783 12 17.0609 12 16V8ZM17 25.95V30C17 30.2652 16.8946 30.5196 16.7071 30.7071C16.5196 30.8946 16.2652 31 16 31C15.7348 31 15.4804 30.8946 15.2929 30.7071C15.1054 30.5196 15 30.2652 15 30V25.95C12.5346 25.6991 10.2497 24.543 8.5873 22.7051C6.9249 20.8672 6.00305 18.4782 6 16C6 15.7348 6.10536 15.4804 6.29289 15.2929C6.48043 15.1054 6.73478 15 7 15C7.26522 15 7.51957 15.1054 7.70711 15.2929C7.89464 15.4804 8 15.7348 8 16C8 18.1217 8.84285 20.1566 10.3431 21.6569C11.8434 23.1571 13.8783 24 16 24C18.1217 24 20.1566 23.1571 21.6569 21.6569C23.1571 20.1566 24 18.1217 24 16C24 15.7348 24.1054 15.4804 24.2929 15.2929C24.4804 15.1054 24.7348 15 25 15C25.2652 15 25.5196 15.1054 25.7071 15.2929C25.8946 15.4804 26 15.7348 26 16C25.997 18.4782 25.0751 20.8672 23.4127 22.7051C21.7503 24.543 19.4654 25.6991 17 25.95Z" fill="currentColor"/></svg></button>
+      </div>
+      <div class="voice-status" id="voice-status"></div>
+      <div class="sidebar-actions">
+        <button class="btn btn-skip" id="btn-skip">Skip</button>
+        <button class="btn btn-primary" id="btn-add-comment">Add Comment</button>
+        <button class="btn btn-next" id="btn-next-file">Next &rarr;</button>
+      </div>
+      <div class="sidebar-actions" style="margin-top:4px">
+        <button class="btn btn-claude" id="btn-ask-claude">Ask Claude</button>
+      </div>
+    </div>
+    <div class="kbd-hints">
+      <span class="kbd-hint"><kbd>&larr;</kbd><kbd>&rarr;</kbd> navigate</span>
+      <span class="kbd-hint"><kbd>/</kbd> comment</span>
+      <span class="kbd-hint"><kbd>R</kbd> record</span>
+      <span class="kbd-hint"><kbd>S</kbd> skip</span>
+      <span class="kbd-hint"><kbd>Esc</kbd> grid</span>
+    </div>
+  </div>
+</div>
+
+<!-- Settings Modal -->
+<div class="modal-overlay" id="settings-modal">
+  <div class="modal">
+    <h3>Settings</h3>
+    <div class="modal-status" id="settings-status"></div>
+    <div class="modal-field">
+      <label>Anthropic API Key</label>
+      <input type="password" id="settings-api-key" placeholder="sk-ant-...">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="settings-cancel">Cancel</button>
+      <button class="btn btn-primary" id="settings-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif', '.svg'];
+const FILE_ICONS = {
+  '.pdf': '\u{1F4C4}', '.txt': '\u{1F4DD}', '.md': '\u{1F4DD}',
+  '.doc': '\u{1F4C3}', '.docx': '\u{1F4C3}',
+};
+
+let files = [];
+let currentIndex = 0;
+let activeFilter = 'all';
+let galleryMode = false;
+
+// ── API helpers ──
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json', ...opts.headers },
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  return res.json();
+}
+
+async function loadConfig() {
+  const config = await api('/api/config');
+  document.getElementById('folder-path').textContent = config.folder;
+}
+
+async function loadFiles() {
+  files = await api('/api/files');
+  updateProgress();
+  renderGrid();
+}
+
+function filteredFiles() {
+  if (activeFilter === 'all') return files;
+  return files.filter(f => f.status === activeFilter);
+}
+
+function updateProgress() {
+  const annotated = files.filter(f => f.status === 'annotated').length;
+  document.getElementById('progress-text').textContent = `${annotated}/${files.length} annotated`;
+}
+
+// ── Grid View ──
+function renderGrid() {
+  const grid = document.getElementById('grid');
+  const visible = filteredFiles();
+  grid.innerHTML = visible.map((file, i) => {
+    const isImage = IMAGE_EXTS.includes(file.ext);
+    const thumb = isImage
+      ? `<img class="grid-thumb" src="/api/files/${encodeURIComponent(file.name)}/preview" loading="lazy" alt="${file.name}">`
+      : `<div class="grid-thumb-placeholder">${FILE_ICONS[file.ext] || '\u{1F4CE}'}</div>`;
+    return `
+      <div class="grid-item" data-filename="${file.name}" onclick="openFile('${file.name}')">
+        ${thumb}
+        <div class="grid-info">
+          <div class="grid-name">${file.name}</div>
+          <div class="grid-meta">
+            <span class="status-dot ${file.status}"></span>
+            ${file.status}${file.commentCount ? ` \u00B7 ${file.commentCount} comment${file.commentCount > 1 ? 's' : ''}` : ''}
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// ── Gallery View ──
+function openFile(filename) {
+  const idx = files.findIndex(f => f.name === filename);
+  if (idx === -1) return;
+  currentIndex = idx;
+  enterGallery();
+}
+
+function enterGallery(onRendered) {
+  galleryMode = true;
+  document.getElementById('overview-container').classList.add('hidden');
+  document.getElementById('gallery').classList.add('active');
+  document.getElementById('btn-add-context').style.display = 'none';
+  document.getElementById('btn-toggle-summary').style.display = 'none';
+  document.getElementById('btn-back').style.display = '';
+  renderGalleryItem().then(() => {
+    if (onRendered) onRendered();
+  });
+}
+
+function exitGallery() {
+  galleryMode = false;
+  document.getElementById('overview-container').classList.remove('hidden');
+  document.getElementById('gallery').classList.remove('active');
+  document.getElementById('btn-add-context').style.display = '';
+  document.getElementById('btn-toggle-summary').style.display = '';
+  document.getElementById('btn-back').style.display = 'none';
+  loadFiles();
+}
+
+async function renderGalleryItem() {
+  if (!files[currentIndex]) return;
+  const file = files[currentIndex];
+  const isImage = IMAGE_EXTS.includes(file.ext);
+
+  // Preview
+  const previewEl = document.getElementById('preview-content');
+  if (isImage) {
+    previewEl.innerHTML = `<img src="/api/files/${encodeURIComponent(file.name)}/preview" alt="${file.name}">`;
+  } else if (file.ext === '.pdf') {
+    previewEl.innerHTML = `<iframe src="/api/files/${encodeURIComponent(file.name)}/preview" style="width:100%;height:100%;border:none;border-radius:4px"></iframe>`;
+  } else {
+    previewEl.innerHTML = `<div class="file-placeholder"><div class="icon">${FILE_ICONS[file.ext] || '\u{1F4CE}'}</div><div class="name">${file.name}</div></div>`;
+  }
+
+  // Sidebar info
+  document.getElementById('sidebar-filename').textContent = file.name;
+  document.getElementById('sidebar-position').textContent = `${currentIndex + 1} of ${files.length}`;
+  document.getElementById('sidebar-progress-fill').style.width = `${((currentIndex + 1) / files.length) * 100}%`;
+
+  // Load comments
+  const context = await api('/api/context');
+  const fileCtx = context[file.name];
+  renderComments(file.name, fileCtx);
+
+  // Clear input
+  document.getElementById('comment-input').value = '';
+}
+
+function renderComments(filename, fileCtx) {
+  const list = document.getElementById('comments-list');
+  if (!fileCtx || fileCtx.comments.length === 0) {
+    list.innerHTML = '<div class="no-comments">No comments yet. Add context for this file.</div>';
+    return;
+  }
+  list.innerHTML = fileCtx.comments.map((c, i) => `
+    <div class="comment" id="comment-${encodeURIComponent(filename)}-${i}">
+      <button class="comment-delete" onclick="deleteComment('${filename}', ${i})" title="Delete">&times;</button>
+      <div class="comment-author ${c.author}">${c.author}</div>
+      <div class="comment-text">${escapeHtml(c.text)}</div>
+      ${c.audio ? `<audio controls preload="none" style="width:100%;height:28px;margin-top:6px;border-radius:4px"><source src="/api/audio/${encodeURIComponent(c.audio)}" type="audio/webm"></audio>` : ''}
+      <div class="comment-time">${new Date(c.ts).toLocaleString()}</div>
+    </div>
+  `).join('');
+  list.scrollTop = list.scrollHeight;
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+async function addComment() {
+  const input = document.getElementById('comment-input');
+  const text = input.value.trim();
+  if (!text) return;
+  const file = files[currentIndex];
+  const body = { author: 'user', text };
+  if (lastAudioFilename) body.audio = lastAudioFilename;
+  await api(`/api/files/${encodeURIComponent(file.name)}/comments`, {
+    method: 'POST',
+    body,
+  });
+  input.value = '';
+  lastAudioFilename = null;
+  // Reload file data
+  const updated = await api('/api/files');
+  files = updated;
+  updateProgress();
+  renderGalleryItem();
+}
+
+async function deleteComment(filename, index) {
+  await api(`/api/files/${encodeURIComponent(filename)}/comments/${index}`, {
+    method: 'DELETE',
+  });
+  const updated = await api('/api/files');
+  files = updated;
+  updateProgress();
+  renderGalleryItem();
+}
+
+async function skipFile() {
+  const file = files[currentIndex];
+  await api(`/api/files/${encodeURIComponent(file.name)}/status`, {
+    method: 'PATCH',
+    body: { status: 'skipped' },
+  });
+  const updated = await api('/api/files');
+  files = updated;
+  updateProgress();
+  goNext();
+}
+
+function goNext() {
+  if (currentIndex < files.length - 1) {
+    currentIndex++;
+    renderGalleryItem();
+  }
+}
+
+function goPrev() {
+  if (currentIndex > 0) {
+    currentIndex--;
+    renderGalleryItem();
+  }
+}
+
+// Start "Add Context" from first pending file
+function startAddContext() {
+  const firstPending = files.findIndex(f => f.status === 'pending');
+  currentIndex = firstPending >= 0 ? firstPending : 0;
+  enterGallery();
+}
+
+// ── Summary Reference Navigation ──
+function navigateToComment(filename, commentIndex) {
+  const fileIdx = files.findIndex(f => f.name === filename);
+  if (fileIdx === -1) {
+    showRefError('File not found: ' + filename);
+    return;
+  }
+  currentIndex = fileIdx;
+  enterGallery(() => {
+    const commentId = 'comment-' + encodeURIComponent(filename) + '-' + commentIndex;
+    const commentEl = document.getElementById(commentId);
+    if (commentEl) {
+      commentEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      commentEl.classList.add('highlight-flash');
+      commentEl.addEventListener('animationend', () => {
+        commentEl.classList.remove('highlight-flash');
+      }, { once: true });
+    } else {
+      showRefError('Comment #' + commentIndex + ' not found on ' + filename);
+    }
+  });
+}
+
+function navigateToImage(filename) {
+  const fileIdx = files.findIndex(f => f.name === filename);
+  if (fileIdx === -1) {
+    showRefError('File not found: ' + filename);
+    return;
+  }
+  currentIndex = fileIdx;
+  enterGallery();
+}
+
+function showRefError(message) {
+  const tooltip = document.createElement('div');
+  tooltip.className = 'ref-error-tooltip';
+  tooltip.textContent = message;
+  tooltip.style.top = '50%';
+  tooltip.style.left = '50%';
+  tooltip.style.transform = 'translate(-50%, -50%)';
+  document.body.appendChild(tooltip);
+  setTimeout(() => tooltip.remove(), 2000);
+}
+
+// ── Event Listeners ──
+document.getElementById('btn-add-context').addEventListener('click', startAddContext);
+document.getElementById('btn-back').addEventListener('click', exitGallery);
+document.getElementById('btn-add-comment').addEventListener('click', addComment);
+document.getElementById('btn-skip').addEventListener('click', skipFile);
+document.getElementById('btn-next-file').addEventListener('click', goNext);
+document.getElementById('nav-prev').addEventListener('click', goPrev);
+document.getElementById('nav-next').addEventListener('click', goNext);
+
+// Comment input: Cmd+Enter or Ctrl+Enter to submit
+document.getElementById('comment-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    addComment();
+  }
+});
+
+// Filter buttons
+document.querySelectorAll('.filter-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    activeFilter = btn.dataset.filter;
+    renderGrid();
+  });
+});
+
+// Keyboard shortcuts
+document.addEventListener('keydown', (e) => {
+  // Don't intercept when typing in input
+  if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') {
+    return;
+  }
+
+  if (!galleryMode) {
+    if (e.key === 'Enter') { startAddContext(); e.preventDefault(); }
+    if (e.key === 'm' || e.key === 'M') { toggleSummary(); e.preventDefault(); }
+    return;
+  }
+
+  switch (e.key) {
+    case 'ArrowLeft': goPrev(); e.preventDefault(); break;
+    case 'ArrowRight': goNext(); e.preventDefault(); break;
+    case '/': document.getElementById('comment-input').focus(); e.preventDefault(); break;
+    case 'r': case 'R': toggleRecording(); e.preventDefault(); break;
+    case 's': case 'S': skipFile(); e.preventDefault(); break;
+    case 'Escape': exitGallery(); e.preventDefault(); break;
+  }
+});
+
+// ── Punctuation Heuristics ──
+function punctuate(raw) {
+  if (!raw) return raw;
+  let text = raw.trim();
+  if (!text) return text;
+
+  // Capitalize first letter
+  text = text.charAt(0).toUpperCase() + text.slice(1);
+
+  // Common spoken sentence-enders: add period before conjunctions that start new thoughts
+  // "and then" / "so then" / "but then" in the middle often indicate new sentences
+  const sentenceBreakers = /\b(so basically|and so|but anyway|okay so|and then I|but I think|so I think|also I|and I think)\b/gi;
+  text = text.replace(sentenceBreakers, (match) => {
+    return '. ' + match.charAt(0).toUpperCase() + match.slice(1);
+  });
+
+  // Capitalize after existing periods, question marks, exclamation marks
+  text = text.replace(/([.!?])\s+([a-z])/g, (_, p, c) => p + ' ' + c.toUpperCase());
+
+  // If text doesn't end with punctuation, add a period
+  if (!/[.!?]$/.test(text)) {
+    text += '.';
+  }
+
+  // Capitalize "I" standing alone
+  text = text.replace(/\bi\b/g, 'I');
+
+  // Capitalize common proper nouns that speech recognition lowercases
+  const properNouns = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
+    'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+  for (const noun of properNouns) {
+    const regex = new RegExp('\\b' + noun + '\\b', 'gi');
+    text = text.replace(regex, noun.charAt(0).toUpperCase() + noun.slice(1));
+  }
+
+  // Clean up double spaces and double periods
+  text = text.replace(/\s{2,}/g, ' ');
+  text = text.replace(/\.{2,}/g, '.');
+  text = text.replace(/\.\s*\./g, '.');
+
+  return text;
+}
+
+// ── Voice Input ──
+let recognition = null;
+let isRecording = false;
+let textBeforeRecording = '';
+let mediaRecorder = null;
+let audioChunks = [];
+let lastAudioFilename = null;
+
+function initVoice() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    document.getElementById('btn-mic').style.display = 'none';
+    return;
+  }
+
+  recognition = new SpeechRecognition();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.lang = 'en-US';
+
+  recognition.onresult = (e) => {
+    // Rebuild full transcript from all results every time
+    let final = '';
+    let interim = '';
+    for (let i = 0; i < e.results.length; i++) {
+      if (e.results[i].isFinal) {
+        final += e.results[i][0].transcript;
+      } else {
+        interim += e.results[i][0].transcript;
+      }
+    }
+    const input = document.getElementById('comment-input');
+    const sep = textBeforeRecording ? textBeforeRecording + ' ' : '';
+    const cleaned = punctuate(final);
+    input.value = sep + cleaned + (interim ? ' ' + interim : '');
+    input.scrollTop = input.scrollHeight;
+
+    document.getElementById('voice-status').textContent = interim ? 'Listening...' : 'Processing...';
+  };
+
+  recognition.onend = () => {
+    if (isRecording) {
+      // Auto-restart if still in recording mode (browser stops after silence)
+      recognition.start();
+      return;
+    }
+    textBeforeRecording = '';
+    document.getElementById('voice-status').textContent = '';
+    document.getElementById('voice-status').classList.remove('recording');
+    document.getElementById('btn-mic').classList.remove('recording');
+  };
+
+  recognition.onerror = (e) => {
+    if (e.error === 'no-speech') return; // Ignore, will auto-restart
+    console.error('Speech error:', e.error);
+    stopRecording();
+    document.getElementById('voice-status').textContent = 'Error: ' + e.error;
+  };
+}
+
+async function startRecording() {
+  if (!recognition) return;
+  isRecording = true;
+  lastAudioFilename = null;
+  audioChunks = [];
+  textBeforeRecording = document.getElementById('comment-input').value.trim();
+  recognition.start();
+
+  // Start audio capture in parallel
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+    mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data); };
+    mediaRecorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      if (audioChunks.length === 0) return;
+      const blob = new Blob(audioChunks, { type: 'audio/webm' });
+      const file = files[currentIndex];
+      if (!file) return;
+      // Upload audio
+      const res = await fetch(`/api/files/${encodeURIComponent(file.name)}/audio`, {
+        method: 'POST',
+        body: blob,
+      });
+      const data = await res.json();
+      lastAudioFilename = data.audioFilename;
+    };
+    mediaRecorder.start();
+  } catch (e) {
+    console.warn('Audio capture unavailable:', e);
+  }
+
+  document.getElementById('btn-mic').classList.add('recording');
+  document.getElementById('voice-status').textContent = 'Listening...';
+  document.getElementById('voice-status').classList.add('recording');
+}
+
+function stopRecording() {
+  if (!recognition) return;
+  isRecording = false;
+  recognition.stop();
+
+  // Stop audio capture
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
+  }
+
+  // Auto-submit after a short delay to let final results + audio upload land
+  setTimeout(() => addComment(), 500);
+}
+
+function toggleRecording() {
+  if (isRecording) {
+    stopRecording();
+  } else {
+    startRecording();
+  }
+}
+
+document.getElementById('btn-mic').addEventListener('click', toggleRecording);
+initVoice();
+
+// ── Auto-refresh on external changes ──
+let lastContextHash = '';
+let pollInterval = null;
+
+async function getContextHash() {
+  const ctx = await api('/api/context');
+  return JSON.stringify(ctx);
+}
+
+async function pollForChanges() {
+  try {
+    const hash = await getContextHash();
+    if (lastContextHash && hash !== lastContextHash) {
+      // Context changed externally — refresh
+      const updated = await api('/api/files');
+      files = updated;
+      updateProgress();
+      if (galleryMode) renderGalleryItem();
+      else renderGrid();
+    }
+    lastContextHash = hash;
+    // Also refresh summary if siderail is open and not being edited
+    if (summaryVisible && !summaryEditMode) {
+      loadSummary();
+    }
+  } catch (e) { /* ignore fetch errors */ }
+}
+
+function startPolling() {
+  if (pollInterval) return;
+  getContextHash().then(h => lastContextHash = h);
+  pollInterval = setInterval(pollForChanges, 2000);
+}
+
+function stopPolling() {
+  if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+}
+
+// ── Settings ──
+let hasApiKey = false;
+
+async function checkApiKey() {
+  const config = await api('/api/config');
+  hasApiKey = config.hasApiKey;
+  updateAskClaudeButton();
+}
+
+function updateAskClaudeButton() {
+  const btn = document.getElementById('btn-ask-claude');
+  if (!hasApiKey) {
+    btn.textContent = 'Ask Claude (set API key)';
+  } else {
+    btn.textContent = 'Ask Claude';
+  }
+}
+
+document.getElementById('btn-settings').addEventListener('click', async () => {
+  const settings = await api('/api/settings');
+  document.getElementById('settings-status').textContent = settings.hasApiKey ? 'API key is configured.' : '';
+  document.getElementById('settings-api-key').value = '';
+  document.getElementById('settings-modal').classList.add('active');
+});
+
+document.getElementById('settings-cancel').addEventListener('click', () => {
+  document.getElementById('settings-modal').classList.remove('active');
+});
+
+document.getElementById('settings-save').addEventListener('click', async () => {
+  const key = document.getElementById('settings-api-key').value.trim();
+  if (!key) return;
+  await api('/api/settings', { method: 'POST', body: { apiKey: key } });
+  hasApiKey = true;
+  updateAskClaudeButton();
+  document.getElementById('settings-modal').classList.remove('active');
+});
+
+// Close modal on overlay click
+document.getElementById('settings-modal').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) {
+    document.getElementById('settings-modal').classList.remove('active');
+  }
+});
+
+// ── Ask Claude ──
+document.getElementById('btn-ask-claude').addEventListener('click', async () => {
+  if (!hasApiKey) {
+    document.getElementById('btn-settings').click();
+    return;
+  }
+  const file = files[currentIndex];
+  if (!file) return;
+
+  const btn = document.getElementById('btn-ask-claude');
+  btn.disabled = true;
+  btn.textContent = 'Thinking...';
+  btn.classList.add('loading');
+
+  try {
+    const res = await api(`/api/files/${encodeURIComponent(file.name)}/ask-claude`, { method: 'POST' });
+    if (res.error) {
+      alert('Error: ' + res.error);
+    }
+  } catch (e) {
+    alert('Failed to reach Claude: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Ask Claude';
+    btn.classList.remove('loading');
+    // Refresh to show new comment
+    const updated = await api('/api/files');
+    files = updated;
+    updateProgress();
+    renderGalleryItem();
+  }
+});
+
+// ── Summary Siderail ──
+let summaryRawContent = '';
+let summaryLastModified = null;
+let summaryEditMode = false;
+let summaryVisible = false;
+let summaryCurrentVersion = null;
+let summaryTotalVersions = 0;
+
+// ── Marked.js custom renderer for summary references ──
+function escapeAttr(str) {
+  return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+if (typeof marked !== 'undefined') {
+  marked.use({
+    renderer: {
+      link({ href, title, tokens }) {
+        const text = this.parser.parseInline(tokens);
+
+        // Handle comment:FILENAME:INDEX links
+        const commentMatch = href && href.match(/^comment:(.+):(\d+)$/);
+        if (commentMatch) {
+          const filename = commentMatch[1];
+          const commentIndex = commentMatch[2];
+          return `<a class="ref-comment" data-ref-type="comment" data-file="${escapeAttr(filename)}" data-comment-index="${commentIndex}" title="Go to comment #${commentIndex} on ${escapeAttr(filename)}">${text}</a>`;
+        }
+
+        // Handle image:FILENAME links
+        const imageMatch = href && href.match(/^image:(.+)$/);
+        if (imageMatch) {
+          const filename = imageMatch[1];
+          return `<a class="ref-image" data-ref-type="image" data-file="${escapeAttr(filename)}" title="View ${escapeAttr(filename)}">${text}</a>`;
+        }
+
+        // Default link rendering
+        const titleAttr = title ? ` title="${escapeAttr(title)}"` : '';
+        return `<a href="${href}"${titleAttr} target="_blank" rel="noopener">${text}</a>`;
+      }
+    }
+  });
+}
+
+async function loadSummary() {
+  const data = await api('/api/summary');
+  if (data.content !== null && data.lastModified !== summaryLastModified) {
+    summaryRawContent = data.content;
+    summaryLastModified = data.lastModified;
+    if (!summaryEditMode) renderSummary();
+  } else if (data.content === null && summaryRawContent) {
+    summaryRawContent = '';
+    summaryLastModified = null;
+    if (!summaryEditMode) renderSummary();
+  }
+}
+
+function renderSummary() {
+  const el = document.getElementById('summary-content');
+  if (!summaryRawContent) {
+    el.innerHTML = '<div class="summary-empty">No summary yet. Click "Generate" to create one.</div>';
+    return;
+  }
+  if (summaryEditMode) {
+    el.innerHTML = `<textarea class="summary-editor" id="summary-editor">${escapeHtml(summaryRawContent)}</textarea>`;
+  } else {
+    const html = (typeof marked !== 'undefined') ? marked.parse(summaryRawContent) : `<pre>${escapeHtml(summaryRawContent)}</pre>`;
+    el.innerHTML = `<div class="summary-rendered">${html}</div>`;
+  }
+}
+
+function toggleSummary() {
+  summaryVisible = !summaryVisible;
+  const rail = document.getElementById('summary-siderail');
+  const btn = document.getElementById('btn-toggle-summary');
+  if (summaryVisible) {
+    rail.classList.add('active');
+    btn.classList.add('btn-primary');
+    btn.classList.remove('btn-ghost');
+    loadSummary();
+    loadVersionList();
+  } else {
+    rail.classList.remove('active');
+    btn.classList.remove('btn-primary');
+    btn.classList.add('btn-ghost');
+  }
+}
+
+function toggleSummaryEdit() {
+  const editBtn = document.getElementById('btn-summary-edit');
+  if (summaryEditMode) {
+    const editor = document.getElementById('summary-editor');
+    if (editor) {
+      summaryRawContent = editor.value;
+      api('/api/summary', { method: 'POST', body: { content: summaryRawContent } });
+    }
+    summaryEditMode = false;
+    editBtn.textContent = 'Edit';
+    renderSummary();
+  } else {
+    summaryEditMode = true;
+    editBtn.textContent = 'Done';
+    renderSummary();
+    const editor = document.getElementById('summary-editor');
+    if (editor) editor.focus();
+  }
+}
+
+function copySummary() {
+  if (!summaryRawContent) return;
+  navigator.clipboard.writeText(summaryRawContent).then(() => {
+    const btn = document.getElementById('btn-summary-copy');
+    btn.textContent = 'Copied';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+  });
+}
+
+async function generateSummaryAction() {
+  if (!hasApiKey) {
+    document.getElementById('btn-settings').click();
+    return;
+  }
+  const btn = document.getElementById('btn-generate-summary');
+  btn.disabled = true;
+  btn.textContent = 'Generating...';
+  try {
+    const res = await api('/api/summary/generate', { method: 'POST', body: {} });
+    if (res.error) {
+      alert('Error: ' + res.error);
+    } else if (res.content) {
+      summaryRawContent = res.content;
+      summaryCurrentVersion = res.version;
+      summaryTotalVersions = res.totalVersions;
+      summaryLastModified = new Date().toISOString();
+      renderSummary();
+      updateVersionNav();
+    }
+  } catch (e) {
+    alert('Failed to generate summary: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Generate';
+  }
+}
+
+function updateVersionNav() {
+  const nav = document.getElementById('version-nav');
+  const label = document.getElementById('version-label');
+  const prevBtn = document.getElementById('btn-version-prev');
+  const nextBtn = document.getElementById('btn-version-next');
+  if (summaryTotalVersions > 0) {
+    nav.style.display = '';
+    label.textContent = `v${summaryCurrentVersion} of ${summaryTotalVersions}`;
+    prevBtn.disabled = summaryCurrentVersion <= 1;
+    nextBtn.disabled = summaryCurrentVersion >= summaryTotalVersions;
+  } else {
+    nav.style.display = 'none';
+  }
+}
+
+async function loadVersion(version) {
+  try {
+    const res = await api(`/api/summary/versions/${version}`);
+    if (res.error) return;
+    summaryRawContent = res.content;
+    summaryCurrentVersion = res.version;
+    summaryTotalVersions = res.totalVersions;
+    renderSummary();
+    updateVersionNav();
+  } catch (e) { /* ignore */ }
+}
+
+async function loadVersionList() {
+  try {
+    const res = await api('/api/summary/versions');
+    summaryTotalVersions = res.total;
+    if (res.total > 0) {
+      summaryCurrentVersion = res.versions[res.versions.length - 1];
+      updateVersionNav();
+    }
+  } catch (e) { /* ignore */ }
+}
+
+document.getElementById('btn-toggle-summary').addEventListener('click', toggleSummary);
+document.getElementById('btn-summary-edit').addEventListener('click', toggleSummaryEdit);
+document.getElementById('btn-summary-copy').addEventListener('click', copySummary);
+document.getElementById('btn-generate-summary').addEventListener('click', generateSummaryAction);
+document.getElementById('btn-version-prev').addEventListener('click', () => {
+  if (summaryCurrentVersion > 1) loadVersion(summaryCurrentVersion - 1);
+});
+document.getElementById('btn-version-next').addEventListener('click', () => {
+  if (summaryCurrentVersion < summaryTotalVersions) loadVersion(summaryCurrentVersion + 1);
+});
+
+// Summary reference click delegation
+document.getElementById('summary-content').addEventListener('click', (e) => {
+  const refEl = e.target.closest('[data-ref-type]');
+  if (!refEl) return;
+  e.preventDefault();
+
+  const refType = refEl.dataset.refType;
+  const filename = refEl.dataset.file;
+
+  if (refType === 'comment') {
+    const commentIndex = parseInt(refEl.dataset.commentIndex, 10);
+    navigateToComment(filename, commentIndex);
+  } else if (refType === 'image') {
+    navigateToImage(filename);
+  }
+});
+
+// ── Init ──
+loadConfig();
+loadFiles();
+startPolling();
+checkApiKey();
+</script>
+</body>
+</html>

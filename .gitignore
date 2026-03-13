@@ -1,0 +1,11 @@
+# Dependencies
+node_modules/
+
+# macOS
+.DS_Store
+
+# Annotator settings (contains API key)
+.annotator-settings.json
+
+# Bun lockfile
+bun.lockb
