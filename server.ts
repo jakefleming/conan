@@ -58,7 +58,12 @@ async function askClaude(filename: string): Promise<string> {
   let existingContext = "";
   if (fileCtx?.comments?.length) {
     existingContext = "\n\nExisting comments on this file:\n" +
-      fileCtx.comments.map(c => `[${c.author}]: ${c.text}`).join("\n");
+      fileCtx.comments.map(c => {
+        const regionNote = c.region
+          ? ` (region: ${Math.round(c.region.x)}%-${Math.round(c.region.x + c.region.w)}% x, ${Math.round(c.region.y)}%-${Math.round(c.region.y + c.region.h)}% y)`
+          : "";
+        return `[${c.author}]${regionNote}: ${c.text}`;
+      }).join("\n");
   }
 
   const messages: any[] = [];
@@ -118,6 +123,136 @@ Your job is to ADD VALUE beyond what the user already said. Follow these rules s
   return data.content[0]?.text ?? "No response";
 }
 
+const pendingAutoAnnotate = new Set<string>();
+
+async function autoAnnotate(filename: string): Promise<{ region: Region; text: string }[]> {
+  if (pendingAutoAnnotate.has(filename)) {
+    throw new Error("Already auto-annotating this file — please wait.");
+  }
+  pendingAutoAnnotate.add(filename);
+  const settings = await readSettings();
+  if (!settings.apiKey) throw new Error("No API key configured");
+
+  const filePath = join(resolvedFolder, filename);
+  const ext = extname(filename).toLowerCase();
+  const isImage = IMAGE_EXTENSIONS.has(ext);
+  if (!isImage) {
+    pendingAutoAnnotate.delete(filename);
+    throw new Error("Auto-annotate only works on images");
+  }
+
+  // Build context from existing comments
+  const context = await readContext();
+  const fileCtx = context[filename];
+  let existingContext = "";
+  if (fileCtx?.comments?.length) {
+    existingContext = "\n\nExisting comments on this file (avoid duplicating these areas):\n" +
+      fileCtx.comments.map(c => {
+        const regionNote = c.region
+          ? ` (region: ${Math.round(c.region.x)}%-${Math.round(c.region.x + c.region.w)}% x, ${Math.round(c.region.y)}%-${Math.round(c.region.y + c.region.h)}% y)`
+          : "";
+        return `[${c.author}]${regionNote}: ${c.text}`;
+      }).join("\n");
+  }
+
+  const imageData = await readFile(filePath);
+  const base64 = imageData.toString("base64");
+  const mediaType = ext === ".png" ? "image/png" : ext === ".gif" ? "image/gif" : ext === ".webp" ? "image/webp" : "image/jpeg";
+
+  const messages = [{
+    role: "user",
+    content: [
+      {
+        type: "image",
+        source: { type: "base64", media_type: mediaType, data: base64 },
+      },
+      {
+        type: "text",
+        text: `You are analyzing a photo of a whiteboard, sketch, or document from a product/design session.${existingContext}
+
+Your task: find each distinct piece of handwritten text, label, diagram element, or visual note in this image. For each one, draw a TIGHT bounding box around JUST that element and transcribe or describe it.
+
+Think of this like OCR — each annotation should wrap ONE specific thing: a single label, a single list, a single diagram, a single arrow with text, etc. NOT large areas of the image.
+
+Return ONLY a valid JSON array. No other text before or after.
+
+Format: [{"region":{"x":N,"y":N,"w":N,"h":N},"text":"what this element says or shows"}]
+
+Coordinate rules:
+- x, y, w, h are percentages (0-100) of the FULL image width and height
+- x,y = top-left corner of the box, w,h = width and height of the box
+- Boxes should be TIGHT — just big enough to contain the element, with minimal padding
+- Typical box width: 5-20% of image. If your box is wider than 40%, it's too big — break it into smaller pieces
+- Overlapping boxes are OK when elements are close together
+
+Content rules:
+- Maximum 8 annotations
+- Skip areas already covered by existing comments
+- For handwritten text: transcribe it in your note
+- For diagrams/arrows: briefly describe what they show
+- Prioritize text and labels over blank space or decorative elements
+- One element per annotation — do not group multiple distinct items into one large box
+- IGNORE any faint text bleeding through from the other side of the paper. Only annotate text/drawings that are clearly written on the front-facing side`,
+      },
+    ],
+  }];
+
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": settings.apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 2048,
+      messages,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    pendingAutoAnnotate.delete(filename);
+    throw new Error(`Claude API error: ${res.status} ${err}`);
+  }
+
+  const data = await res.json() as any;
+  pendingAutoAnnotate.delete(filename);
+  const rawText = data.content[0]?.text ?? "";
+
+  // Extract JSON array from response (Claude might wrap it in markdown code fences)
+  const jsonMatch = rawText.match(/\[[\s\S]*\]/);
+  if (!jsonMatch) throw new Error("Claude did not return a valid JSON array");
+
+  let annotations: any[];
+  try {
+    annotations = JSON.parse(jsonMatch[0]);
+  } catch {
+    throw new Error("Failed to parse Claude's JSON response");
+  }
+
+  // Validate and clean
+  return annotations
+    .filter((a: any) => a && a.region && typeof a.text === "string")
+    .filter((a: any) => {
+      const r = a.region;
+      return typeof r.x === "number" && typeof r.y === "number" &&
+             typeof r.w === "number" && typeof r.h === "number" &&
+             r.w > 1 && r.h > 1;
+    })
+    .slice(0, 8)
+    .map((a: any) => ({
+      region: {
+        x: Math.max(0, Math.min(100, a.region.x)),
+        y: Math.max(0, Math.min(100, a.region.y)),
+        w: Math.max(1, Math.min(100 - a.region.x, a.region.w)),
+        h: Math.max(1, Math.min(100 - a.region.y, a.region.h)),
+      },
+      text: a.text,
+    }));
+}
+
 // Target folder from CLI arg
 const targetFolder = process.argv[2];
 if (!targetFolder) {
@@ -134,7 +269,8 @@ if (!existsSync(resolvedFolder)) {
   process.exit(1);
 }
 
-type Comment = { author: "user" | "claude"; text: string; ts: string; audio?: string };
+type Region = { x: number; y: number; w: number; h: number };
+type Comment = { author: "user" | "claude"; text: string; ts: string; audio?: string; region?: Region };
 type FileContext = { comments: Comment[]; status: "pending" | "annotated" | "skipped" };
 type ContextData = Record<string, FileContext>;
 
@@ -221,7 +357,10 @@ async function generateSummary(): Promise<{ content: string; version: number }> 
       annotationDump += `\n## ${filename} (status: ${fileCtx.status})\n`;
       for (let i = 0; i < fileCtx.comments.length; i++) {
         const c = fileCtx.comments[i];
-        annotationDump += `- [${c.author.toUpperCase()}, #${i}] ${c.text}\n`;
+        const regionNote = c.region
+          ? ` (region: ${Math.round(c.region.x)}%-${Math.round(c.region.x + c.region.w)}% x, ${Math.round(c.region.y)}%-${Math.round(c.region.y + c.region.h)}% y)`
+          : "";
+        annotationDump += `- [${c.author.toUpperCase()}, #${i}]${regionNote} ${c.text}\n`;
       }
     }
 
@@ -313,6 +452,7 @@ function json(data: unknown, status = 200): Response {
 
 const server = Bun.serve({
   port: PORT,
+  idleTimeout: 120, // Claude API calls with large images can take a while
   async fetch(req) {
     const url = new URL(req.url);
     const path = url.pathname;
@@ -364,6 +504,33 @@ const server = Bun.serve({
       }
     }
 
+    // API: auto-annotate — Claude identifies regions and creates annotated comments
+    const autoAnnotateMatch = path.match(/^\/api\/files\/(.+)\/auto-annotate$/);
+    if (autoAnnotateMatch && req.method === "POST") {
+      const filename = decodeURIComponent(autoAnnotateMatch[1]);
+      try {
+        const annotations = await autoAnnotate(filename);
+        const context = await readContext();
+        if (!context[filename]) {
+          context[filename] = { comments: [], status: "pending" };
+        }
+        const ts = new Date().toISOString();
+        for (const ann of annotations) {
+          context[filename].comments.push({
+            author: "claude",
+            text: ann.text,
+            ts,
+            region: ann.region,
+          });
+        }
+        context[filename].status = "annotated";
+        await writeContext(context);
+        return json({ ok: true, count: annotations.length });
+      } catch (e: any) {
+        return json({ error: e.message }, 500);
+      }
+    }
+
     // API: list files with context
     if (path === "/api/files" && req.method === "GET") {
       const files = await listFiles();
@@ -373,8 +540,42 @@ const server = Bun.serve({
         ext: extname(name).toLowerCase(),
         status: context[name]?.status ?? "pending",
         commentCount: context[name]?.comments?.length ?? 0,
+        comments: context[name]?.comments ?? [],
       }));
       return json(result);
+    }
+
+    // API: file thumbnail (resized for grid view)
+    const thumbMatch = path.match(/^\/api\/files\/(.+)\/thumb$/);
+    if (thumbMatch && req.method === "GET") {
+      const filename = decodeURIComponent(thumbMatch[1]);
+      const filePath = join(resolvedFolder, filename);
+      if (!existsSync(filePath)) return json({ error: "Not found" }, 404);
+      const ext = extname(filename).toLowerCase();
+      const imageExts = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif"]);
+      if (!imageExts.has(ext)) {
+        // Non-image files: fall through to full preview
+        const mime = MIME_TYPES[ext] ?? "application/octet-stream";
+        return new Response(Bun.file(filePath), { headers: { "Content-Type": mime } });
+      }
+      const thumbDir = join(resolvedFolder, ".thumbs");
+      if (!existsSync(thumbDir)) await mkdir(thumbDir, { recursive: true });
+      const thumbPath = join(thumbDir, `${basename(filename, ext)}.jpg`);
+      if (!existsSync(thumbPath)) {
+        // Generate thumbnail using macOS sips
+        const proc = Bun.spawnSync([
+          "sips", "-s", "format", "jpeg", "-s", "formatOptions", "70",
+          "-Z", "400", filePath, "--out", thumbPath,
+        ]);
+        if (proc.exitCode !== 0) {
+          // Fallback to original
+          const mime = MIME_TYPES[ext] ?? "application/octet-stream";
+          return new Response(Bun.file(filePath), { headers: { "Content-Type": mime } });
+        }
+      }
+      return new Response(Bun.file(thumbPath), {
+        headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=86400" },
+      });
     }
 
     // API: file preview
@@ -386,13 +587,12 @@ const server = Bun.serve({
       const ext = extname(filename).toLowerCase();
       const mime = MIME_TYPES[ext] ?? "application/octet-stream";
       const file = Bun.file(filePath);
-      return new Response(file, { headers: { "Content-Type": mime } });
-    }
-
-    // API: get context
-    if (path === "/api/context" && req.method === "GET") {
-      const context = await readContext();
-      return json(context);
+      return new Response(file, {
+        headers: {
+          "Content-Type": mime,
+          "Access-Control-Allow-Origin": "*",
+        },
+      });
     }
 
     // API: upload audio for a file
@@ -422,7 +622,7 @@ const server = Bun.serve({
     const commentMatch = path.match(/^\/api\/files\/(.+)\/comments$/);
     if (commentMatch && req.method === "POST") {
       const filename = decodeURIComponent(commentMatch[1]);
-      const body = (await req.json()) as { author: string; text: string; audio?: string };
+      const body = (await req.json()) as { author: string; text: string; audio?: string; region?: Region };
       if (!body.text?.trim()) return json({ error: "Empty comment" }, 400);
 
       const context = await readContext();
@@ -435,6 +635,7 @@ const server = Bun.serve({
         ts: new Date().toISOString(),
       };
       if (body.audio) comment.audio = body.audio;
+      if (body.region) comment.region = body.region;
       context[filename].comments.push(comment);
       context[filename].status = "annotated";
       await writeContext(context);
@@ -472,6 +673,76 @@ const server = Bun.serve({
       }
       await writeContext(context);
       return json(context[filename]);
+    }
+
+    // API: update a comment's region
+    const regionMatch = path.match(/^\/api\/files\/(.+)\/comments\/(\d+)\/region$/);
+    if (regionMatch && req.method === "PUT") {
+      const filename = decodeURIComponent(regionMatch[1]);
+      const index = parseInt(regionMatch[2], 10);
+      const body = (await req.json()) as { region: Region };
+      const context = await readContext();
+      if (!context[filename]) return json({ error: "Not found" }, 404);
+      if (index < 0 || index >= context[filename].comments.length) return json({ error: "Invalid index" }, 400);
+      context[filename].comments[index].region = body.region;
+      await writeContext(context);
+      return json({ ok: true });
+    }
+
+    // API: update comment text
+    const textMatch = path.match(/^\/api\/files\/(.+)\/comments\/(\d+)\/text$/);
+    if (textMatch && req.method === "PUT") {
+      const filename = decodeURIComponent(textMatch[1]);
+      const index = parseInt(textMatch[2], 10);
+      const body = (await req.json()) as { text: string };
+      const context = await readContext();
+      if (!context[filename]) return json({ error: "Not found" }, 404);
+      if (index < 0 || index >= context[filename].comments.length) return json({ error: "Invalid index" }, 400);
+      context[filename].comments[index].text = body.text;
+      await writeContext(context);
+      return json({ ok: true });
+    }
+
+    // API: fix comment formatting with Claude
+    const fixMatch = path.match(/^\/api\/files\/(.+)\/comments\/(\d+)\/fix$/);
+    if (fixMatch && req.method === "POST") {
+      const filename = decodeURIComponent(fixMatch[1]);
+      const index = parseInt(fixMatch[2], 10);
+      const context = await readContext();
+      if (!context[filename]) return json({ error: "Not found" }, 404);
+      if (index < 0 || index >= context[filename].comments.length) return json({ error: "Invalid index" }, 400);
+      const comment = context[filename].comments[index];
+      const settings = await readSettings();
+      if (!settings.apiKey) return json({ error: "No API key" }, 400);
+
+      try {
+        const response = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "x-api-key": settings.apiKey,
+            "content-type": "application/json",
+            "anthropic-version": "2023-06-01",
+          },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 2048,
+            messages: [{
+              role: "user",
+              content: `Fix the formatting and transcription errors in the following text. This was likely transcribed from speech, so fix run-on sentences, add proper punctuation, paragraph breaks, and correct obvious mistranscriptions. Keep the meaning and content identical — only fix formatting and grammar. Return ONLY the fixed text, nothing else.\n\nText:\n${comment.text}`,
+            }],
+          }),
+        });
+        const data = await response.json() as any;
+        const fixedText = data.content?.[0]?.text?.trim();
+        if (fixedText) {
+          context[filename].comments[index].text = fixedText;
+          await writeContext(context);
+          return json({ ok: true, text: fixedText });
+        }
+        return json({ error: "No response from Claude" }, 500);
+      } catch (e: any) {
+        return json({ error: e.message }, 500);
+      }
     }
 
     // API: get summary

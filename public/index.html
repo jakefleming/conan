@@ -109,7 +109,7 @@
     background: transparent;
     color: var(--text-muted);
     cursor: pointer;
-    transition: all 0.15s;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
   }
   .filter-btn.active {
     background: var(--accent);
@@ -196,11 +196,121 @@
     position: relative;
     min-width: 0;
   }
+  #preview-content {
+    width: 100%;
+    height: 100%;
+  }
   .gallery-preview img {
     max-width: 100%;
     max-height: 100%;
     object-fit: contain;
     border-radius: 4px;
+  }
+
+  /* ── Zoom/Pan container ── */
+  .zoom-container {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    position: relative;
+    cursor: crosshair;
+  }
+  .zoom-container img {
+    position: absolute;
+    transform-origin: 0 0;
+    max-width: none;
+    max-height: none;
+    border-radius: 4px;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+
+  /* ── Region overlay ── */
+  .region-overlay {
+    position: absolute;
+    top: 0; left: 0;
+    transform-origin: 0 0;
+    pointer-events: none;
+    overflow: visible;
+  }
+  .region-rect-drawing {
+    fill: none;
+    stroke: #00ff66;
+    stroke-width: 5;
+    stroke-dasharray: 10 5;
+  }
+  .region-rect-staged {
+    fill: none;
+    stroke: #00ff66;
+    stroke-width: 5;
+    stroke-dasharray: 10 5;
+  }
+  .region-rect-hover {
+    fill: none;
+    stroke: #ff00ff;
+    stroke-width: 5;
+  }
+  .region-rect-persistent {
+    fill: none;
+    stroke: #00ff66;
+    stroke-width: 3;
+    opacity: 0.7;
+  }
+  .region-rect-focused {
+    fill: none;
+    stroke: #00ff66;
+    stroke-width: 5;
+    opacity: 1;
+  }
+  .region-rect-dimmed {
+    fill: none;
+    stroke: #00ff66;
+    stroke-width: 2;
+    opacity: 0.15;
+  }
+  .canvas-tool-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.1);
+    backdrop-filter: blur(8px);
+    border: none;
+    color: white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, opacity 0.15s;
+  }
+  .canvas-tool-btn:hover { background: rgba(255,255,255,0.2); }
+  .canvas-tool-btn.off { opacity: 0.4; }
+  .canvas-tool-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .canvas-tool-btn.loading { animation: pulse 1s ease-in-out infinite; }
+  .region-indicator {
+    display: inline-block;
+    margin-left: 6px;
+    font-size: 11px;
+    color: var(--accent);
+    cursor: default;
+    vertical-align: middle;
+  }
+  .region-clear {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    font-size: 11px;
+    color: var(--accent);
+    background: rgba(59, 130, 246, 0.1);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    cursor: pointer;
+    margin-bottom: 6px;
+  }
+  .region-clear:hover { background: rgba(59, 130, 246, 0.2); }
+  .region-clear .region-clear-x {
+    font-size: 13px;
+    line-height: 1;
   }
   .gallery-preview .file-placeholder {
     text-align: center;
@@ -213,6 +323,7 @@
     position: absolute;
     top: 50%;
     transform: translateY(-50%);
+    z-index: 2;
     width: 40px;
     height: 40px;
     border-radius: 50%;
@@ -231,14 +342,40 @@
   .gallery-nav.prev { left: 16px; }
   .gallery-nav.next { right: 16px; }
 
+  .rotate-controls {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    z-index: 2;
+    display: flex;
+    gap: 4px;
+  }
+
   /* ── Sidebar ── */
   .gallery-sidebar {
     width: 380px;
-    min-width: 380px;
+    min-width: 260px;
+    max-width: 60vw;
     background: var(--surface);
     border-left: 1px solid var(--border);
     display: flex;
     flex-direction: column;
+    position: relative;
+    flex-shrink: 0;
+  }
+  .sidebar-resize-handle {
+    position: absolute;
+    left: -3px;
+    top: 0;
+    bottom: 0;
+    width: 6px;
+    cursor: col-resize;
+    z-index: 10;
+  }
+  .sidebar-resize-handle:hover,
+  .sidebar-resize-handle.active {
+    background: var(--accent);
+    opacity: 0.4;
   }
   .sidebar-header {
     padding: 16px;
@@ -296,26 +433,107 @@
     line-height: 1.5;
     white-space: pre-wrap;
   }
+  .comment-text-edit {
+    display: block;
+    width: 100%;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-left: 2px solid var(--accent);
+    padding-left: 8px;
+    color: var(--text);
+    font-size: 13px;
+    font-family: inherit;
+    line-height: 1.5;
+    resize: vertical;
+    outline: none;
+    box-sizing: border-box;
+    white-space: pre-wrap;
+  }
+  .comment-edit-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .comment-edit-actions .btn-save {
+    padding: 3px 10px;
+    font-size: 11px;
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .comment-edit-actions .btn-save:hover { background: var(--accent-hover); }
+  .comment-edit-actions .btn-cancel {
+    padding: 3px 10px;
+    font-size: 11px;
+    background: none;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .comment-edit-actions .btn-cancel:hover { color: var(--text); }
   .comment-time {
     font-size: 10px;
     color: var(--text-muted);
     margin-top: 4px;
   }
-  .comment-delete {
+  .comment-actions {
     position: absolute;
     top: 8px;
     right: 8px;
+    display: flex;
+    gap: 2px;
     opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .comment:hover .comment-actions { opacity: 1; }
+  .comment-action-btn {
     background: none;
     border: none;
     color: var(--text-muted);
     cursor: pointer;
-    font-size: 14px;
-    padding: 2px 6px;
+    padding: 2px 4px;
     border-radius: 4px;
-    transition: opacity 0.15s, color 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.15s, background 0.15s;
   }
-  .comment-delete:hover { color: var(--red); }
+  .comment-action-btn:hover { color: var(--text); background: rgba(255,255,255,0.08); }
+  .comment-action-btn.delete:hover { color: var(--red); }
+
+  /* Fix formatting loading state */
+  @keyframes fixingPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  .comment.fixing {
+    animation: fixingPulse 1.5s ease-in-out infinite;
+    pointer-events: none;
+  }
+  .comment.fixing .comment-text {
+    animation: fixingPulse 1.2s ease-in-out infinite;
+    color: var(--text-muted);
+  }
+  .comment-fix-spinner {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    color: var(--text-muted);
+    font-size: 11px;
+  }
+  .comment-fix-spinner svg {
+    animation: spin 0.8s linear infinite;
+  }
 
   .no-comments {
     color: var(--text-muted);
@@ -331,19 +549,28 @@
   .input-row {
     display: flex;
     gap: 8px;
+    align-items: end;
+  }
+  .input-wrap {
+    flex: 1;
+    position: relative;
   }
   .comment-input {
-    flex: 1;
-    padding: 10px 12px;
+    display: block;
+    width: 100%;
+    margin: 0;
+    padding: 8px 36px 8px 12px;
     background: var(--surface-2);
     border: 1px solid var(--border);
     border-radius: var(--radius);
     color: var(--text);
     font-size: 13px;
+    line-height: 20px;
     font-family: inherit;
     resize: none;
-    min-height: 40px;
-    max-height: 120px;
+    box-sizing: border-box;
+    overflow: hidden;
+    field-sizing: content;
   }
   .comment-input:focus {
     outline: none;
@@ -352,28 +579,45 @@
   .comment-input::placeholder { color: var(--text-muted); }
 
   .btn-mic {
-    width: 40px;
-    min-width: 40px;
-    height: 40px;
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 28px;
+    height: 28px;
     border-radius: 50%;
-    border: 1px solid var(--border);
-    background: var(--surface-2);
+    border: none;
+    background: transparent;
     color: var(--text-muted);
-    font-size: 18px;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 0.15s;
-    align-self: flex-end;
+    transition: color 0.15s, background 0.15s;
   }
-  .btn-mic:hover { border-color: var(--text-muted); color: var(--text); }
+  .btn-mic:hover { color: var(--text); background: rgba(255,255,255,0.08); }
   .btn-mic.recording {
     background: var(--red);
-    border-color: var(--red);
     color: white;
     animation: pulse 1.5s ease-in-out infinite;
   }
+
+  .btn-send {
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    border-radius: var(--radius);
+    border: none;
+    background: var(--accent);
+    color: white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s;
+    flex-shrink: 0;
+  }
+  .btn-send:hover { background: var(--accent-hover); }
   @keyframes pulse {
     0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
     50% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
@@ -386,33 +630,43 @@
   }
   .voice-status.recording { color: var(--red); }
 
-  .sidebar-actions {
+
+  .sidebar-tools {
     display: flex;
-    gap: 8px;
-    margin-top: 8px;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+    flex-wrap: wrap;
   }
-  .sidebar-actions .btn { flex: 1; }
-
-  .btn-skip {
-    background: transparent;
+  .tool-link {
+    background: none;
+    border: none;
     color: var(--text-muted);
-    border: 1px solid var(--border);
+    font-size: 11px;
+    font-family: inherit;
+    cursor: pointer;
+    padding: 3px 6px;
+    border-radius: 4px;
+    transition: color 0.15s, background 0.15s;
   }
-  .btn-skip:hover { background: var(--surface-2); color: var(--text); }
-  .btn-next {
-    background: var(--accent);
-    color: white;
+  .tool-link:hover {
+    color: var(--text);
+    background: var(--surface-2);
   }
-  .btn-next:hover { background: var(--accent-hover); }
-
-  .btn-claude {
-    background: var(--green);
-    color: #000;
-    font-weight: 600;
+  .tool-link.claude { color: var(--green); }
+  .tool-link.claude:hover { color: #4ade80; background: rgba(34, 197, 94, 0.1); }
+  .tool-link.annotate { color: #a78bfa; }
+  .tool-link.annotate:hover { color: #c4b5fd; background: rgba(167, 139, 250, 0.1); }
+  .tool-link:disabled { opacity: 0.4; cursor: not-allowed; }
+  .tool-link.loading { animation: pulse 1s ease-in-out infinite; }
+  .tool-sep {
+    color: var(--border);
+    font-size: 10px;
+    user-select: none;
   }
-  .btn-claude:hover { background: #16a34a; }
-  .btn-claude:disabled { opacity: 0.5; cursor: not-allowed; }
-  .btn-claude.loading { animation: pulse 1s ease-in-out infinite; }
 
   /* ── Settings Modal ── */
   .modal-overlay {
@@ -623,28 +877,6 @@
     user-select: none;
   }
 
-  /* ── Keyboard hint ── */
-  .kbd-hints {
-    padding: 8px 16px;
-    border-top: 1px solid var(--border);
-    display: flex;
-    gap: 12px;
-    justify-content: center;
-  }
-  .kbd-hint {
-    font-size: 10px;
-    color: var(--text-muted);
-  }
-  kbd {
-    display: inline-block;
-    padding: 1px 5px;
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: 3px;
-    font-size: 10px;
-    font-family: inherit;
-    margin-right: 2px;
-  }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/marked@14/marked.min.js"></script>
 </head>
@@ -661,7 +893,7 @@
     <button class="btn btn-ghost" id="btn-toggle-summary">Summary</button>
     <button class="btn btn-primary" id="btn-add-context">Add Context</button>
     <button class="btn btn-ghost" id="btn-back" style="display:none">Back to Grid</button>
-    <button class="btn btn-ghost" id="btn-settings" title="Settings">&#9881;</button>
+    <button class="btn btn-ghost" id="btn-settings" title="API Key"><svg width="18" height="18" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M27.0713 4.92874C25.4829 3.33812 23.4049 2.32908 21.1726 2.06443C18.9403 1.79979 16.684 2.29497 14.7677 3.47009C12.8514 4.6452 11.3869 6.43169 10.6106 8.54129C9.83424 10.6509 9.79133 12.9605 10.4888 15.0975L3.58626 22C3.39973 22.185 3.25185 22.4053 3.15121 22.648C3.05057 22.8907 2.99917 23.151 3.00001 23.4137V27C3.00001 27.5304 3.21072 28.0391 3.5858 28.4142C3.96087 28.7893 4.46958 29 5.00001 29H9.00001C9.26523 29 9.51958 28.8946 9.70712 28.7071C9.89465 28.5196 10 28.2652 10 28V26H12C12.2652 26 12.5196 25.8946 12.7071 25.7071C12.8947 25.5196 13 25.2652 13 25V23H15C15.1314 23.0001 15.2615 22.9743 15.3829 22.9241C15.5043 22.8739 15.6146 22.8003 15.7075 22.7075L16.9025 21.5112C17.9028 21.8366 18.9482 22.0015 20 22H20.0125C21.9893 21.9976 23.9211 21.4094 25.5637 20.3096C27.2063 19.2098 28.4862 17.6479 29.2415 15.8211C29.9969 13.9943 30.1939 11.9846 29.8076 10.0459C29.4213 8.10723 28.4691 6.32651 27.0713 4.92874ZM28 12.2625C27.8638 16.5237 24.2813 19.995 20.0138 20H20C18.9877 20.0017 17.9844 19.8104 17.0438 19.4362C16.8598 19.3564 16.656 19.3337 16.4589 19.3712C16.2619 19.4086 16.0806 19.5044 15.9388 19.6462L14.5863 21H12C11.7348 21 11.4804 21.1053 11.2929 21.2929C11.1054 21.4804 11 21.7348 11 22V24H9.00001C8.73479 24 8.48044 24.1053 8.2929 24.2929C8.10537 24.4804 8.00001 24.7348 8.00001 25V27H5.00001V23.4137L12.3538 16.0612C12.4955 15.9194 12.5914 15.7381 12.6288 15.5411C12.6663 15.344 12.6436 15.1402 12.5638 14.9562C12.1884 14.0125 11.9971 13.0056 12 11.99C12 7.72249 15.4763 4.13999 19.7375 4.00374C20.8321 3.96721 21.9225 4.15582 22.9413 4.55788C23.96 4.95995 24.8853 5.5669 25.6599 6.34115C26.4345 7.1154 27.0419 8.04044 27.4444 9.05899C27.8469 10.0775 28.036 11.1679 28 12.2625ZM24 9.49999C24 9.79666 23.912 10.0867 23.7472 10.3333C23.5824 10.58 23.3481 10.7723 23.074 10.8858C22.7999 10.9993 22.4983 11.029 22.2074 10.9712C21.9164 10.9133 21.6491 10.7704 21.4394 10.5606C21.2296 10.3509 21.0867 10.0836 21.0288 9.79262C20.971 9.50165 21.0007 9.20005 21.1142 8.92596C21.2277 8.65187 21.42 8.41761 21.6667 8.25278C21.9133 8.08796 22.2033 7.99999 22.5 7.99999C22.8978 7.99999 23.2794 8.15802 23.5607 8.43933C23.842 8.72063 24 9.10216 24 9.49999Z" fill="currentColor"/></svg></button>
   </div>
 </div>
 
@@ -704,8 +936,23 @@
     <button class="gallery-nav prev" id="nav-prev">&#8249;</button>
     <div id="preview-content"></div>
     <button class="gallery-nav next" id="nav-next">&#8250;</button>
+    <div class="rotate-controls">
+      <button class="canvas-tool-btn" id="btn-toggle-annotations" title="Toggle annotations">
+        <svg width="18" height="18" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M30.9137 15.595C30.87 15.4963 29.8112 13.1475 27.4575 10.7937C24.3212 7.6575 20.36 6 16 6C11.64 6 7.67874 7.6575 4.54249 10.7937C2.18874 13.1475 1.12499 15.5 1.08624 15.595C1.02938 15.7229 1 15.8613 1 16.0012C1 16.1412 1.02938 16.2796 1.08624 16.4075C1.12999 16.5062 2.18874 18.8538 4.54249 21.2075C7.67874 24.3425 11.64 26 16 26C20.36 26 24.3212 24.3425 27.4575 21.2075C29.8112 18.8538 30.87 16.5062 30.9137 16.4075C30.9706 16.2796 31 16.1412 31 16.0012C31 15.8613 30.9706 15.7229 30.9137 15.595ZM16 24C12.1525 24 8.79124 22.6012 6.00874 19.8438C4.86704 18.7084 3.89572 17.4137 3.12499 16C3.89551 14.5862 4.86686 13.2915 6.00874 12.1562C8.79124 9.39875 12.1525 8 16 8C19.8475 8 23.2087 9.39875 25.9912 12.1562C27.1352 13.2912 28.1086 14.5859 28.8812 16C27.98 17.6825 24.0537 24 16 24ZM16 10C14.8133 10 13.6533 10.3519 12.6666 11.0112C11.6799 11.6705 10.9108 12.6075 10.4567 13.7039C10.0026 14.8003 9.88377 16.0067 10.1153 17.1705C10.3468 18.3344 10.9182 19.4035 11.7573 20.2426C12.5965 21.0818 13.6656 21.6532 14.8294 21.8847C15.9933 22.1162 17.1997 21.9974 18.2961 21.5433C19.3924 21.0892 20.3295 20.3201 20.9888 19.3334C21.6481 18.3467 22 17.1867 22 16C21.9983 14.4092 21.3657 12.884 20.2408 11.7592C19.1159 10.6343 17.5908 10.0017 16 10ZM16 20C15.2089 20 14.4355 19.7654 13.7777 19.3259C13.1199 18.8864 12.6072 18.2616 12.3045 17.5307C12.0017 16.7998 11.9225 15.9956 12.0768 15.2196C12.2312 14.4437 12.6122 13.731 13.1716 13.1716C13.731 12.6122 14.4437 12.2312 15.2196 12.0769C15.9956 11.9225 16.7998 12.0017 17.5307 12.3045C18.2616 12.6072 18.8863 13.1199 19.3259 13.7777C19.7654 14.4355 20 15.2089 20 16C20 17.0609 19.5786 18.0783 18.8284 18.8284C18.0783 19.5786 17.0609 20 16 20Z" fill="currentColor"/></svg>
+      </button>
+      <button class="canvas-tool-btn" id="btn-auto-annotate" title="Auto-annotate with Claude">
+        <svg width="18" height="18" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M25 6H17V2C17 1.73478 16.8946 1.48043 16.7071 1.29289C16.5196 1.10536 16.2652 1 16 1C15.7348 1 15.4804 1.10536 15.2929 1.29289C15.1054 1.48043 15 1.73478 15 2V6H7C5.93913 6 4.92172 6.42143 4.17157 7.17157C3.42143 7.92172 3 8.93913 3 10V24C3 25.0609 3.42143 26.0783 4.17157 26.8284C4.92172 27.5786 5.93913 28 7 28H25C26.0609 28 27.0783 27.5786 27.8284 26.8284C28.5786 26.0783 29 25.0609 29 24V10C29 8.93913 28.5786 7.92172 27.8284 7.17157C27.0783 6.42143 26.0609 6 25 6ZM27 24C27 24.5304 26.7893 25.0391 26.4142 25.4142C26.0391 25.7893 25.5304 26 25 26H7C6.46957 26 5.96086 25.7893 5.58579 25.4142C5.21071 25.0391 5 24.5304 5 24V10C5 9.46957 5.21071 8.96086 5.58579 8.58579C5.96086 8.21071 6.46957 8 7 8H25C25.5304 8 26.0391 8.21071 26.4142 8.58579C26.7893 8.96086 27 9.46957 27 10V24ZM20.5 17H11.5C10.5717 17 9.6815 17.3687 9.02513 18.0251C8.36875 18.6815 8 19.5717 8 20.5C8 21.4283 8.36875 22.3185 9.02513 22.9749C9.6815 23.6313 10.5717 24 11.5 24H20.5C21.4283 24 22.3185 23.6313 22.9749 22.9749C23.6313 22.3185 24 21.4283 24 20.5C24 19.5717 23.6313 18.6815 22.9749 18.0251C22.3185 17.3687 21.4283 17 20.5 17ZM17.5 19V22H14.5V19H17.5ZM10 20.5C10 20.1022 10.158 19.7206 10.4393 19.4393C10.7206 19.158 11.1022 19 11.5 19H12.5V22H11.5C11.1022 22 10.7206 21.842 10.4393 21.5607C10.158 21.2794 10 20.8978 10 20.5ZM20.5 22H19.5V19H20.5C20.8978 19 21.2794 19.158 21.5607 19.4393C21.842 19.7206 22 20.1022 22 20.5C22 20.8978 21.842 21.2794 21.5607 21.5607C21.2794 21.842 20.8978 22 20.5 22ZM9 13.5C9 13.2033 9.08797 12.9133 9.2528 12.6666C9.41762 12.42 9.65189 12.2277 9.92597 12.1142C10.2001 12.0006 10.5017 11.9709 10.7926 12.0288C11.0836 12.0867 11.3509 12.2296 11.5607 12.4393C11.7704 12.6491 11.9133 12.9164 11.9712 13.2074C12.0291 13.4983 11.9994 13.7999 11.8858 14.074C11.7723 14.3481 11.58 14.5824 11.3334 14.7472C11.0867 14.912 10.7967 15 10.5 15C10.1022 15 9.72064 14.842 9.43934 14.5607C9.15804 14.2794 9 13.8978 9 13.5ZM20 13.5C20 13.2033 20.088 12.9133 20.2528 12.6666C20.4176 12.42 20.6519 12.2277 20.926 12.1142C21.2001 12.0006 21.5017 11.9709 21.7926 12.0288C22.0836 12.0867 22.3509 12.2296 22.5607 12.4393C22.7704 12.6491 22.9133 12.9164 22.9712 13.2074C23.0291 13.4983 22.9993 13.7999 22.8858 14.074C22.7723 14.3481 22.58 14.5824 22.3334 14.7472C22.0867 14.912 21.7967 15 21.5 15C21.1022 15 20.7206 14.842 20.4393 14.5607C20.158 14.2794 20 13.8978 20 13.5Z" fill="currentColor"/></svg>
+      </button>
+      <button class="canvas-tool-btn" id="btn-rotate-ccw" title="Rotate left [">
+        <svg width="18" height="18" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M28 16C28.0003 19.1549 26.7582 22.1829 24.5425 24.4288C22.3268 26.6746 19.3158 27.9576 16.1612 28H16C12.9353 28.0076 9.98535 26.8348 7.7625 24.725C7.66705 24.6347 7.59031 24.5265 7.53667 24.4066C7.48303 24.2866 7.45354 24.1573 7.44989 24.026C7.44623 23.8946 7.46848 23.7639 7.51536 23.6411C7.56224 23.5184 7.63284 23.4061 7.72312 23.3106C7.81341 23.2152 7.92161 23.1384 8.04155 23.0848C8.16149 23.0312 8.29082 23.0017 8.42216 22.998C8.55349 22.9943 8.68427 23.0166 8.807 23.0635C8.92974 23.1104 9.04205 23.181 9.1375 23.2712C10.5672 24.6196 12.3626 25.5168 14.2993 25.8507C16.236 26.1847 18.2281 25.9405 20.0269 25.1489C21.8256 24.3572 23.3512 23.053 24.4131 21.3993C25.475 19.7456 26.026 17.8157 25.9974 15.8507C25.9688 13.8856 25.3619 11.9725 24.2523 10.3504C23.1428 8.72835 21.5799 7.46914 19.7589 6.73012C17.9379 5.9911 15.9395 5.80504 14.0133 6.19518C12.0872 6.58532 10.3187 7.53436 8.92875 8.92375C8.91854 8.93479 8.90769 8.94522 8.89625 8.955L5.57375 12H9C9.26522 12 9.51957 12.1054 9.70711 12.2929C9.89464 12.4804 10 12.7348 10 13C10 13.2652 9.89464 13.5196 9.70711 13.7071C9.51957 13.8946 9.26522 14 9 14H3C2.73478 14 2.48043 13.8946 2.29289 13.7071C2.10536 13.5196 2 13.2652 2 13V7C2 6.73478 2.10536 6.48043 2.29289 6.29289C2.48043 6.10535 2.73478 6 3 6C3.26522 6 3.51957 6.10535 3.70711 6.29289C3.89464 6.48043 4 6.73478 4 7V10.725L7.53125 7.5C9.21123 5.82655 11.3493 4.68833 13.6757 4.22903C16.002 3.76974 18.4122 4.00995 20.6022 4.91935C22.7921 5.82876 24.6635 7.36657 25.9801 9.33868C27.2968 11.3108 27.9996 13.6288 28 16Z" fill="currentColor"/></svg>
+      </button>
+      <button class="canvas-tool-btn" id="btn-rotate-cw" title="Rotate right ]">
+        <svg width="18" height="18" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M30 7V13C30 13.2652 29.8946 13.5196 29.7071 13.7071C29.5196 13.8946 29.2652 14 29 14H23C22.7348 14 22.4804 13.8946 22.2929 13.7071C22.1053 13.5196 22 13.2652 22 13C22 12.7348 22.1053 12.4804 22.2929 12.2929C22.4804 12.1054 22.7348 12 23 12H26.425L23.1012 8.955L23.07 8.925C21.6801 7.53562 19.9116 6.58658 17.9854 6.19644C16.0593 5.8063 14.0609 5.99236 12.2399 6.73138C10.4188 7.4704 8.85594 8.72961 7.74641 10.3517C6.63688 11.9738 6.02991 13.8869 6.00132 15.8519C5.97273 17.817 6.52379 19.7469 7.58565 21.4006C8.64752 23.0543 10.1731 24.3584 11.9719 25.1501C13.7706 25.9418 15.7628 26.1859 17.6995 25.852C19.6361 25.5181 21.4315 24.6209 22.8612 23.2725C23.054 23.0902 23.3113 22.9919 23.5766 22.9993C23.8418 23.0066 24.0933 23.1191 24.2756 23.3119C24.458 23.5047 24.5562 23.762 24.5489 24.0272C24.5415 24.2925 24.429 24.5439 24.2362 24.7263C22.0131 26.8347 19.0639 28.0069 16 28H15.835C13.8697 27.9731 11.941 27.4638 10.2186 26.517C8.49619 25.5702 7.03272 24.2147 5.95681 22.5698C4.88091 20.9249 4.22552 19.0409 4.04824 17.0834C3.87096 15.1259 4.17723 13.1549 4.94013 11.3435C5.70302 9.53203 6.89918 7.93574 8.42348 6.69487C9.94777 5.454 11.7535 4.60655 13.6821 4.227C15.6106 3.84744 17.6028 3.94741 19.4836 4.51811C21.3645 5.08881 23.0763 6.11278 24.4687 7.5L28 10.725V7C28 6.73479 28.1053 6.48043 28.2929 6.2929C28.4804 6.10536 28.7348 6 29 6C29.2652 6 29.5196 6.10536 29.7071 6.2929C29.8946 6.48043 30 6.73479 30 7Z" fill="currentColor"/></svg>
+      </button>
+    </div>
   </div>
-  <div class="gallery-sidebar">
+  <div class="gallery-sidebar" id="gallery-sidebar">
+    <div class="sidebar-resize-handle" id="sidebar-resize-handle"></div>
     <div class="sidebar-header">
       <div class="sidebar-filename" id="sidebar-filename"></div>
       <div class="sidebar-position" id="sidebar-position"></div>
@@ -714,25 +961,26 @@
     <div class="comments-list" id="comments-list"></div>
     <div class="sidebar-input">
       <div class="input-row">
-        <textarea class="comment-input" id="comment-input" placeholder="Add your context..." rows="2"></textarea>
-        <button class="btn-mic" id="btn-mic" title="Voice input"><svg width="18" height="18" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M16 22C17.5908 21.9983 19.116 21.3657 20.2408 20.2408C21.3657 19.116 21.9983 17.5908 22 16V8C22 6.4087 21.3679 4.88258 20.2426 3.75736C19.1174 2.63214 17.5913 2 16 2C14.4087 2 12.8826 2.63214 11.7574 3.75736C10.6321 4.88258 10 6.4087 10 8V16C10.0017 17.5908 10.6343 19.116 11.7592 20.2408C12.884 21.3657 14.4092 21.9983 16 22ZM12 8C12 6.93913 12.4214 5.92172 13.1716 5.17157C13.9217 4.42143 14.9391 4 16 4C17.0609 4 18.0783 4.42143 18.8284 5.17157C19.5786 5.92172 20 6.93913 20 8V16C20 17.0609 19.5786 18.0783 18.8284 18.8284C18.0783 19.5786 17.0609 20 16 20C14.9391 20 13.9217 19.5786 13.1716 18.8284C12.4214 18.0783 12 17.0609 12 16V8ZM17 25.95V30C17 30.2652 16.8946 30.5196 16.7071 30.7071C16.5196 30.8946 16.2652 31 16 31C15.7348 31 15.4804 30.8946 15.2929 30.7071C15.1054 30.5196 15 30.2652 15 30V25.95C12.5346 25.6991 10.2497 24.543 8.5873 22.7051C6.9249 20.8672 6.00305 18.4782 6 16C6 15.7348 6.10536 15.4804 6.29289 15.2929C6.48043 15.1054 6.73478 15 7 15C7.26522 15 7.51957 15.1054 7.70711 15.2929C7.89464 15.4804 8 15.7348 8 16C8 18.1217 8.84285 20.1566 10.3431 21.6569C11.8434 23.1571 13.8783 24 16 24C18.1217 24 20.1566 23.1571 21.6569 21.6569C23.1571 20.1566 24 18.1217 24 16C24 15.7348 24.1054 15.4804 24.2929 15.2929C24.4804 15.1054 24.7348 15 25 15C25.2652 15 25.5196 15.1054 25.7071 15.2929C25.8946 15.4804 26 15.7348 26 16C25.997 18.4782 25.0751 20.8672 23.4127 22.7051C21.7503 24.543 19.4654 25.6991 17 25.95Z" fill="currentColor"/></svg></button>
+        <div class="input-wrap">
+          <textarea class="comment-input" id="comment-input" placeholder="Add your context..." rows="1"></textarea>
+          <button class="btn-mic" id="btn-mic" title="Voice input"><svg width="16" height="16" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M16 22C17.5908 21.9983 19.116 21.3657 20.2408 20.2408C21.3657 19.116 21.9983 17.5908 22 16V8C22 6.4087 21.3679 4.88258 20.2426 3.75736C19.1174 2.63214 17.5913 2 16 2C14.4087 2 12.8826 2.63214 11.7574 3.75736C10.6321 4.88258 10 6.4087 10 8V16C10.0017 17.5908 10.6343 19.116 11.7592 20.2408C12.884 21.3657 14.4092 21.9983 16 22ZM12 8C12 6.93913 12.4214 5.92172 13.1716 5.17157C13.9217 4.42143 14.9391 4 16 4C17.0609 4 18.0783 4.42143 18.8284 5.17157C19.5786 5.92172 20 6.93913 20 8V16C20 17.0609 19.5786 18.0783 18.8284 18.8284C18.0783 19.5786 17.0609 20 16 20C14.9391 20 13.9217 19.5786 13.1716 18.8284C12.4214 18.0783 12 17.0609 12 16V8ZM17 25.95V30C17 30.2652 16.8946 30.5196 16.7071 30.7071C16.5196 30.8946 16.2652 31 16 31C15.7348 31 15.4804 30.8946 15.2929 30.7071C15.1054 30.5196 15 30.2652 15 30V25.95C12.5346 25.6991 10.2497 24.543 8.5873 22.7051C6.9249 20.8672 6.00305 18.4782 6 16C6 15.7348 6.10536 15.4804 6.29289 15.2929C6.48043 15.1054 6.73478 15 7 15C7.26522 15 7.51957 15.1054 7.70711 15.2929C7.89464 15.4804 8 15.7348 8 16C8 18.1217 8.84285 20.1566 10.3431 21.6569C11.8434 23.1571 13.8783 24 16 24C18.1217 24 20.1566 23.1571 21.6569 21.6569C23.1571 20.1566 24 18.1217 24 16C24 15.7348 24.1054 15.4804 24.2929 15.2929C24.4804 15.1054 24.7348 15 25 15C25.2652 15 25.5196 15.1054 25.7071 15.2929C25.8946 15.4804 26 15.7348 26 16C25.997 18.4782 25.0751 20.8672 23.4127 22.7051C21.7503 24.543 19.4654 25.6991 17 25.95Z" fill="currentColor"/></svg></button>
+        </div>
+        <button class="btn-send" id="btn-add-comment" title="Add comment">
+          <svg width="18" height="18" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M28.9838 14.25L7.98378 2.26378C7.62956 2.06437 7.22298 1.97763 6.81822 2.01512C6.41346 2.0526 6.02973 2.21254 5.71816 2.47361C5.40659 2.73468 5.18196 3.08449 5.07421 3.47644C4.96646 3.86839 4.9807 4.28387 5.11503 4.66753L8.94378 16L5.11503 27.3338C5.00848 27.6354 4.97581 27.9581 5.01978 28.2749C5.06374 28.5918 5.18306 28.8934 5.36771 29.1546C5.55236 29.4158 5.79696 29.6289 6.08098 29.776C6.36501 29.9231 6.68017 29.9999 7.00003 30C7.34753 29.9993 7.68896 29.9089 7.99128 29.7375L28.9813 17.7313C29.2909 17.5578 29.5488 17.3052 29.7285 16.9992C29.9082 16.6932 30.0032 16.3448 30.0038 15.99C30.0045 15.6351 29.9107 15.2865 29.7321 14.9798C29.5535 14.6732 29.2965 14.4196 28.9875 14.245L28.9838 14.25ZM7.00003 28C7.00057 27.995 7.00057 27.99 7.00003 27.985L10.7175 17H18C18.2652 17 18.5196 16.8947 18.7071 16.7071C18.8947 16.5196 19 16.2652 19 16C19 15.7348 18.8947 15.4805 18.7071 15.2929C18.5196 15.1054 18.2652 15 18 15H10.7175L7.00753 4.02003C7.0063 4.01295 7.00376 4.00616 7.00003 4.00003L28 15.9788L7.00003 28Z" fill="currentColor"/></svg>
+        </button>
       </div>
       <div class="voice-status" id="voice-status"></div>
-      <div class="sidebar-actions">
-        <button class="btn btn-skip" id="btn-skip">Skip</button>
-        <button class="btn btn-primary" id="btn-add-comment">Add Comment</button>
-        <button class="btn btn-next" id="btn-next-file">Next &rarr;</button>
+      <div class="sidebar-tools">
+        <button class="tool-link claude" id="btn-ask-claude">Ask Claude</button>
+        <span class="tool-sep">&middot;</span>
+        <button class="tool-link" id="btn-copy-image" title="Copy plain image to clipboard">
+          <svg width="14" height="14" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M27 4H11C10.7348 4 10.4804 4.10536 10.2929 4.29289C10.1054 4.48043 10 4.73478 10 5V10H5C4.73478 10 4.48043 10.1054 4.29289 10.2929C4.10536 10.4804 4 10.7348 4 11V27C4 27.2652 4.10536 27.5196 4.29289 27.7071C4.48043 27.8946 4.73478 28 5 28H21C21.2652 28 21.5196 27.8946 21.7071 27.7071C21.8946 27.5196 22 27.2652 22 27V22H27C27.2652 22 27.5196 21.8946 27.7071 21.7071C27.8946 21.5196 28 21.2652 28 21V5C28 4.73478 27.8946 4.48043 27.7071 4.29289C27.5196 4.10536 27.2652 4 27 4ZM20 26H6V12H20V26ZM26 20H22V11C22 10.7348 21.8946 10.4804 21.7071 10.2929C21.5196 10.1054 21.2652 10 21 10H12V6H26V20Z" fill="currentColor"/></path></svg>
+        </button>
+        <span class="tool-sep">&middot;</span>
+        <button class="tool-link" id="btn-copy-context" title="Copy image + comments to clipboard">
+          <svg width="14" height="14" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M26 4H10C9.46957 4 8.96086 4.21071 8.58579 4.58579C8.21071 4.96086 8 5.46957 8 6V8H6C5.46957 8 4.96086 8.21071 4.58579 8.58579C4.21071 8.96086 4 9.46957 4 10V26C4 26.5304 4.21071 27.0391 4.58579 27.4142C4.96086 27.7893 5.46957 28 6 28H22C22.5304 28 23.0391 27.7893 23.4142 27.4142C23.7893 27.0391 24 26.5304 24 26V24H26C26.5304 24 27.0391 23.7893 27.4142 23.4142C27.7893 23.0391 28 22.5304 28 22V6C28 5.46957 27.7893 4.96086 27.4142 4.58579C27.0391 4.21071 26.5304 4 26 4ZM10 6H26V14.6725L23.9125 12.585C23.5375 12.2102 23.029 11.9997 22.4988 11.9997C21.9685 11.9997 21.46 12.2102 21.085 12.585L11.6713 22H10V6ZM22 26H6V10H8V22C8 22.5304 8.21071 23.0391 8.58579 23.4142C8.96086 23.7893 9.46957 24 10 24H22V26ZM26 22H14.5L22.5 14L26 17.5V22ZM15 14C15.5933 14 16.1734 13.8241 16.6667 13.4944C17.1601 13.1648 17.5446 12.6962 17.7716 12.1481C17.9987 11.5999 18.0581 10.9967 17.9424 10.4147C17.8266 9.83279 17.5409 9.29824 17.1213 8.87868C16.7018 8.45912 16.1672 8.1734 15.5853 8.05764C15.0033 7.94189 14.4001 8.0013 13.8519 8.22836C13.3038 8.45542 12.8352 8.83994 12.5056 9.33329C12.1759 9.82664 12 10.4067 12 11C12 11.7956 12.3161 12.5587 12.8787 13.1213C13.4413 13.6839 14.2044 14 15 14ZM15 10C15.1978 10 15.3911 10.0586 15.5556 10.1685C15.72 10.2784 15.8482 10.4346 15.9239 10.6173C15.9996 10.8 16.0194 11.0011 15.9808 11.1951C15.9422 11.3891 15.847 11.5673 15.7071 11.7071C15.5673 11.847 15.3891 11.9422 15.1951 11.9808C15.0011 12.0194 14.8 11.9996 14.6173 11.9239C14.4346 11.8482 14.2784 11.72 14.1685 11.5556C14.0586 11.3911 14 11.1978 14 11C14 10.7348 14.1054 10.4804 14.2929 10.2929C14.4804 10.1054 14.7348 10 15 10Z" fill="currentColor"/></path></svg>
+        </button>
       </div>
-      <div class="sidebar-actions" style="margin-top:4px">
-        <button class="btn btn-claude" id="btn-ask-claude">Ask Claude</button>
-      </div>
-    </div>
-    <div class="kbd-hints">
-      <span class="kbd-hint"><kbd>&larr;</kbd><kbd>&rarr;</kbd> navigate</span>
-      <span class="kbd-hint"><kbd>/</kbd> comment</span>
-      <span class="kbd-hint"><kbd>R</kbd> record</span>
-      <span class="kbd-hint"><kbd>S</kbd> skip</span>
-      <span class="kbd-hint"><kbd>Esc</kbd> grid</span>
     </div>
   </div>
 </div>
@@ -803,7 +1051,7 @@ function renderGrid() {
   grid.innerHTML = visible.map((file, i) => {
     const isImage = IMAGE_EXTS.includes(file.ext);
     const thumb = isImage
-      ? `<img class="grid-thumb" src="/api/files/${encodeURIComponent(file.name)}/preview" loading="lazy" alt="${file.name}">`
+      ? `<img class="grid-thumb" src="/api/files/${encodeURIComponent(file.name)}/thumb" loading="lazy" alt="${file.name}">`
       : `<div class="grid-thumb-placeholder">${FILE_ICONS[file.ext] || '\u{1F4CE}'}</div>`;
     return `
       <div class="grid-item" data-filename="${file.name}" onclick="openFile('${file.name}')">
@@ -855,10 +1103,21 @@ async function renderGalleryItem() {
   const file = files[currentIndex];
   const isImage = IMAGE_EXTS.includes(file.ext);
 
+  // Reset annotation state on navigation
+  stagedRegion = null;
+  drawingRegion = null;
+  hoveredCommentRegion = null;
+  focusedCommentIndex = null;
+  editingRegionIndex = null;
+  editDragType = null;
+  editStartMouse = null;
+  editStartRegion = null;
+
   // Preview
   const previewEl = document.getElementById('preview-content');
   if (isImage) {
-    previewEl.innerHTML = `<img src="/api/files/${encodeURIComponent(file.name)}/preview" alt="${file.name}">`;
+    previewEl.innerHTML = `<div class="zoom-container" id="zoom-container"><img src="/api/files/${encodeURIComponent(file.name)}/preview" alt="${file.name}" id="zoom-img"><svg class="region-overlay" id="region-overlay"></svg></div>`;
+    initZoom();
   } else if (file.ext === '.pdf') {
     previewEl.innerHTML = `<iframe src="/api/files/${encodeURIComponent(file.name)}/preview" style="width:100%;height:100%;border:none;border-radius:4px"></iframe>`;
   } else {
@@ -870,10 +1129,8 @@ async function renderGalleryItem() {
   document.getElementById('sidebar-position').textContent = `${currentIndex + 1} of ${files.length}`;
   document.getElementById('sidebar-progress-fill').style.width = `${((currentIndex + 1) / files.length) * 100}%`;
 
-  // Load comments
-  const context = await api('/api/context');
-  const fileCtx = context[file.name];
-  renderComments(file.name, fileCtx);
+  // Load comments from file data we already have
+  renderComments(file.name, file);
 
   // Clear input
   document.getElementById('comment-input').value = '';
@@ -885,16 +1142,172 @@ function renderComments(filename, fileCtx) {
     list.innerHTML = '<div class="no-comments">No comments yet. Add context for this file.</div>';
     return;
   }
-  list.innerHTML = fileCtx.comments.map((c, i) => `
-    <div class="comment" id="comment-${encodeURIComponent(filename)}-${i}">
-      <button class="comment-delete" onclick="deleteComment('${filename}', ${i})" title="Delete">&times;</button>
-      <div class="comment-author ${c.author}">${c.author}</div>
-      <div class="comment-text">${escapeHtml(c.text)}</div>
+  const editSvg = `<svg width="14" height="14" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M28.4138 9.17122L22.8288 3.58497C22.643 3.39921 22.4225 3.25185 22.1799 3.15131C21.9372 3.05077 21.6771 2.99902 21.4144 2.99902C21.1517 2.99902 20.8916 3.05077 20.6489 3.15131C20.4062 3.25185 20.1857 3.39921 20 3.58497L4.58626 19C4.39973 19.185 4.25185 19.4053 4.15121 19.648C4.05057 19.8907 3.99917 20.151 4.00001 20.4137V26C4.00001 26.5304 4.21072 27.0391 4.5858 27.4142C4.96087 27.7893 5.46958 28 6.00001 28H11.5863C11.849 28.0008 12.1093 27.9494 12.352 27.8488C12.5947 27.7481 12.815 27.6002 13 27.4137L28.4138 12C28.5995 11.8142 28.7469 11.5937 28.8474 11.3511C28.948 11.1084 28.9997 10.8483 28.9997 10.5856C28.9997 10.3229 28.948 10.0628 28.8474 9.82012C28.7469 9.57744 28.5995 9.35695 28.4138 9.17122ZM11.5863 26H6.00001V20.4137L17 9.41372L22.5863 15L11.5863 26ZM24 13.585L18.4138 7.99997L21.4138 4.99997L27 10.585L24 13.585Z" fill="currentColor"/></svg>`;
+  const fixSvg = `<svg width="14" height="14" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M25 6H17V2C17 1.73478 16.8946 1.48043 16.7071 1.29289C16.5196 1.10536 16.2652 1 16 1C15.7348 1 15.4804 1.10536 15.2929 1.29289C15.1054 1.48043 15 1.73478 15 2V6H7C5.93913 6 4.92172 6.42143 4.17157 7.17157C3.42143 7.92172 3 8.93913 3 10V24C3 25.0609 3.42143 26.0783 4.17157 26.8284C4.92172 27.5786 5.93913 28 7 28H25C26.0609 28 27.0783 27.5786 27.8284 26.8284C28.5786 26.0783 29 25.0609 29 24V10C29 8.93913 28.5786 7.92172 27.8284 7.17157C27.0783 6.42143 26.0609 6 25 6ZM27 24C27 24.5304 26.7893 25.0391 26.4142 25.4142C26.0391 25.7893 25.5304 26 25 26H7C6.46957 26 5.96086 25.7893 5.58579 25.4142C5.21071 25.0391 5 24.5304 5 24V10C5 9.46957 5.21071 8.96086 5.58579 8.58579C5.96086 8.21071 6.46957 8 7 8H25C25.5304 8 26.0391 8.21071 26.4142 8.58579C26.7893 8.96086 27 9.46957 27 10V24ZM20.5 17H11.5C10.5717 17 9.6815 17.3687 9.02513 18.0251C8.36875 18.6815 8 19.5717 8 20.5C8 21.4283 8.36875 22.3185 9.02513 22.9749C9.6815 23.6313 10.5717 24 11.5 24H20.5C21.4283 24 22.3185 23.6313 22.9749 22.9749C23.6313 22.3185 24 21.4283 24 20.5C24 19.5717 23.6313 18.6815 22.9749 18.0251C22.3185 17.3687 21.4283 17 20.5 17ZM17.5 19V22H14.5V19H17.5ZM10 20.5C10 20.1022 10.158 19.7206 10.4393 19.4393C10.7206 19.158 11.1022 19 11.5 19H12.5V22H11.5C11.1022 22 10.7206 21.842 10.4393 21.5607C10.158 21.2794 10 20.8978 10 20.5ZM20.5 22H19.5V19H20.5C20.8978 19 21.2794 19.158 21.5607 19.4393C21.842 19.7206 22 20.1022 22 20.5C22 20.8978 21.842 21.2794 21.5607 21.5607C21.2794 21.842 20.8978 22 20.5 22ZM9 13.5C9 13.2033 9.08797 12.9133 9.2528 12.6666C9.41762 12.42 9.65189 12.2277 9.92597 12.1142C10.2001 12.0006 10.5017 11.9709 10.7926 12.0288C11.0836 12.0867 11.3509 12.2296 11.5607 12.4393C11.7704 12.6491 11.9133 12.9164 11.9712 13.2074C12.0291 13.4983 11.9994 13.7999 11.8858 14.074C11.7723 14.3481 11.58 14.5824 11.3334 14.7472C11.0867 14.912 10.7967 15 10.5 15C10.1022 15 9.72064 14.842 9.43934 14.5607C9.15804 14.2794 9 13.8978 9 13.5ZM20 13.5C20 13.2033 20.088 12.9133 20.2528 12.6666C20.4176 12.42 20.6519 12.2277 20.926 12.1142C21.2001 12.0006 21.5017 11.9709 21.7926 12.0288C22.0836 12.0867 22.3509 12.2296 22.5607 12.4393C22.7704 12.6491 22.9133 12.9164 22.9712 13.2074C23.0291 13.4983 22.9993 13.7999 22.8858 14.074C22.7723 14.3481 22.58 14.5824 22.3334 14.7472C22.0867 14.912 21.7967 15 21.5 15C21.1022 15 20.7206 14.842 20.4393 14.5607C20.158 14.2794 20 13.8978 20 13.5Z" fill="currentColor"/></svg>`;
+
+  list.innerHTML = fileCtx.comments.map((c, i) => {
+    const regionData = c.region ? `data-region='${JSON.stringify(c.region)}'` : '';
+    const regionLabel = c.region ? `<span class="region-indicator" title="Has region annotation">#${i + 1} ⬒</span>` : '';
+    return `
+    <div class="comment" id="comment-${encodeURIComponent(filename)}-${i}" ${regionData}>
+      <div class="comment-actions">
+        <button class="comment-action-btn edit" data-idx="${i}" title="Edit">${editSvg}</button>
+        <button class="comment-action-btn fix" data-idx="${i}" title="Fix formatting with Claude">${fixSvg}</button>
+        <button class="comment-action-btn delete" data-idx="${i}" title="Delete">&times;</button>
+      </div>
+      <div class="comment-author ${c.author}">${c.author}${regionLabel}</div>
+      <div class="comment-text" data-comment-idx="${i}">${escapeHtml(c.text)}</div>
       ${c.audio ? `<audio controls preload="none" style="width:100%;height:28px;margin-top:6px;border-radius:4px"><source src="/api/audio/${encodeURIComponent(c.audio)}" type="audio/webm"></audio>` : ''}
       <div class="comment-time">${new Date(c.ts).toLocaleString()}</div>
-    </div>
-  `).join('');
+    </div>`;
+  }).join('');
   list.scrollTop = list.scrollHeight;
+
+  // Delete buttons
+  list.querySelectorAll('.comment-action-btn.delete').forEach(btn => {
+    btn.addEventListener('click', () => deleteComment(filename, parseInt(btn.dataset.idx, 10)));
+  });
+
+  // Edit buttons
+  list.querySelectorAll('.comment-action-btn.edit').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      const comment = fileCtx.comments[idx];
+      if (!comment) return;
+      const textEl = list.querySelector(`.comment-text[data-comment-idx="${idx}"]`);
+      if (!textEl || textEl.querySelector('textarea')) return;
+
+      // Replace text with textarea at same size
+      const ta = document.createElement('textarea');
+      ta.className = 'comment-text-edit';
+      ta.value = comment.text;
+      // Match the height of the original text
+      const origHeight = textEl.offsetHeight;
+      textEl.textContent = '';
+      textEl.appendChild(ta);
+      ta.style.height = Math.max(40, origHeight) + 'px';
+      ta.focus();
+
+      // Add save/cancel buttons
+      const actions = document.createElement('div');
+      actions.className = 'comment-edit-actions';
+      actions.innerHTML = '<button class="btn-save">Save</button><button class="btn-cancel">Cancel</button>';
+      textEl.parentNode.insertBefore(actions, textEl.nextSibling);
+
+      const cancel = () => {
+        actions.remove();
+        textEl.textContent = comment.text;
+      };
+      const save = async () => {
+        const newText = ta.value.trim();
+        if (newText && newText !== comment.text) {
+          comment.text = newText;
+          try {
+            await api(`/api/files/${encodeURIComponent(filename)}/comments/${idx}/text`, {
+              method: 'PUT',
+              body: { text: newText },
+            });
+          } catch (err) {
+            console.error('Failed to save comment edit:', err);
+          }
+        }
+        actions.remove();
+        textEl.textContent = comment.text;
+      };
+
+      actions.querySelector('.btn-save').addEventListener('click', save);
+      actions.querySelector('.btn-cancel').addEventListener('click', cancel);
+      ta.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { e.stopPropagation(); cancel(); }
+      });
+    });
+  });
+
+  // Fix formatting buttons (Claude) — with undo
+  const undoSvg = `<svg width="14" height="14" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M28 16C28.0003 19.1549 26.7582 22.1829 24.5425 24.4288C22.3268 26.6746 19.3158 27.9576 16.1612 28H16C12.9353 28.0076 9.98535 26.8348 7.7625 24.725C7.66705 24.6347 7.59031 24.5265 7.53667 24.4066C7.48303 24.2866 7.45354 24.1573 7.44989 24.026C7.44623 23.8946 7.46848 23.7639 7.51536 23.6411C7.56224 23.5184 7.63284 23.4061 7.72312 23.3106C7.81341 23.2152 7.92161 23.1384 8.04155 23.0848C8.16149 23.0312 8.29082 23.0017 8.42216 22.998C8.55349 22.9943 8.68427 23.0166 8.807 23.0635C8.92974 23.1104 9.04205 23.181 9.1375 23.2712C10.5672 24.6196 12.3626 25.5168 14.2993 25.8507C16.236 26.1847 18.2281 25.9405 20.0269 25.1489C21.8256 24.3572 23.3512 23.053 24.4131 21.3993C25.475 19.7456 26.026 17.8157 25.9974 15.8507C25.9688 13.8856 25.3619 11.9725 24.2523 10.3504C23.1428 8.72835 21.5799 7.46914 19.7589 6.73012C17.9379 5.9911 15.9395 5.80504 14.0133 6.19518C12.0872 6.58532 10.3187 7.53436 8.92875 8.92375C8.91854 8.93479 8.90769 8.94522 8.89625 8.955L5.57375 12H9C9.26522 12 9.51957 12.1054 9.70711 12.2929C9.89464 12.4804 10 12.7348 10 13C10 13.2652 9.89464 13.5196 9.70711 13.7071C9.51957 13.8946 9.26522 14 9 14H3C2.73478 14 2.48043 13.8946 2.29289 13.7071C2.10536 13.5196 2 13.2652 2 13V7C2 6.73478 2.10536 6.48043 2.29289 6.29289C2.48043 6.10535 2.73478 6 3 6C3.26522 6 3.51957 6.10535 3.70711 6.29289C3.89464 6.48043 4 6.73478 4 7V10.725L7.53125 7.5C9.21123 5.82655 11.3493 4.68833 13.6757 4.22903C16.002 3.76974 18.4122 4.00995 20.6022 4.91935C22.7921 5.82876 24.6635 7.36657 25.9801 9.33868C27.2968 11.3108 27.9996 13.6288 28 16Z" fill="currentColor"/></svg>`;
+  list.querySelectorAll('.comment-action-btn.fix').forEach(btn => {
+    let preFixText = null;
+    btn.addEventListener('click', async () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      const comment = fileCtx.comments[idx];
+      if (!comment) return;
+      const textEl = list.querySelector(`.comment-text[data-comment-idx="${idx}"]`);
+
+      // If we have a stashed original, this click is an undo
+      if (preFixText !== null) {
+        const revertText = preFixText;
+        preFixText = null;
+        comment.text = revertText;
+        if (textEl) textEl.textContent = revertText;
+        btn.innerHTML = fixSvg;
+        btn.title = 'Fix formatting with Claude';
+        try {
+          await api(`/api/files/${encodeURIComponent(filename)}/comments/${idx}/text`, {
+            method: 'PUT',
+            body: { text: revertText },
+          });
+        } catch (err) {
+          console.error('Failed to revert comment:', err);
+        }
+        return;
+      }
+
+      // Otherwise, fix with Claude
+      if (!hasApiKey) {
+        document.getElementById('btn-settings').click();
+        return;
+      }
+      preFixText = comment.text;
+      btn.classList.add('loading');
+      btn.style.opacity = '1';
+
+      // Add loading state to the comment card
+      const commentEl = btn.closest('.comment');
+      if (commentEl) commentEl.classList.add('fixing');
+
+      // Insert spinner below text
+      const spinnerEl = document.createElement('div');
+      spinnerEl.className = 'comment-fix-spinner';
+      spinnerEl.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 2V6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M12 18V22" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.3"/><path d="M4.93 4.93L7.76 7.76" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.85"/><path d="M16.24 16.24L19.07 19.07" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.15"/><path d="M2 12H6" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.7"/><path d="M18 12H22" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.2"/><path d="M4.93 19.07L7.76 16.24" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.55"/><path d="M16.24 7.76L19.07 4.93" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.4"/></svg> Fixing with Claude…`;
+      if (textEl) textEl.parentNode.insertBefore(spinnerEl, textEl.nextSibling);
+
+      try {
+        const res = await api(`/api/files/${encodeURIComponent(filename)}/comments/${idx}/fix`, { method: 'POST' });
+        if (res.text) {
+          comment.text = res.text;
+          if (textEl) textEl.textContent = res.text;
+          // Swap to undo icon
+          btn.innerHTML = undoSvg;
+          btn.title = 'Undo fix';
+        } else {
+          preFixText = null; // fix failed, clear stash
+        }
+      } catch (err) {
+        console.error('Failed to fix comment:', err);
+        preFixText = null;
+      } finally {
+        btn.classList.remove('loading');
+        btn.style.opacity = '';
+        if (commentEl) commentEl.classList.remove('fixing');
+        if (spinnerEl.parentNode) spinnerEl.remove();
+      }
+    });
+  });
+
+  // Attach hover listeners for region focus (dims others, highlights this one)
+  list.querySelectorAll('.comment[data-region]').forEach((el, _, all) => {
+    const idx = parseInt(el.id.split('-').pop(), 10);
+    el.addEventListener('mouseenter', () => {
+      focusedCommentIndex = idx;
+      highlightSidebarComment(idx);
+      renderRegionOverlay();
+    });
+    el.addEventListener('mouseleave', () => {
+      focusedCommentIndex = null;
+      highlightSidebarComment(null);
+      renderRegionOverlay();
+    });
+  });
 }
 
 function escapeHtml(str) {
@@ -910,12 +1323,16 @@ async function addComment() {
   const file = files[currentIndex];
   const body = { author: 'user', text };
   if (lastAudioFilename) body.audio = lastAudioFilename;
+  if (stagedRegion) body.region = stagedRegion;
   await api(`/api/files/${encodeURIComponent(file.name)}/comments`, {
     method: 'POST',
     body,
   });
   input.value = '';
   lastAudioFilename = null;
+  stagedRegion = null;
+  updateStagedRegionUI();
+  renderRegionOverlay();
   // Reload file data
   const updated = await api('/api/files');
   files = updated;
@@ -1010,14 +1427,561 @@ function showRefError(message) {
   setTimeout(() => tooltip.remove(), 2000);
 }
 
+// ── Zoom & Pan ──
+let zoomScale = 1;
+let zoomX = 0;
+let zoomY = 0;
+let zoomFitScale = 1;
+let zoomNatW = 0;
+let zoomNatH = 0;
+let rotation = 0; // 0, 90, 180, 270
+
+function getVisualDims() {
+  const isR = rotation % 180 !== 0;
+  return {
+    visW: isR ? zoomNatH : zoomNatW,
+    visH: isR ? zoomNatW : zoomNatH,
+    rotOffX: isR ? (zoomNatW - zoomNatH) / 2 : 0,
+    rotOffY: isR ? (zoomNatH - zoomNatW) / 2 : 0,
+  };
+}
+
+// Region drawing state
+let stagedRegion = null;
+let drawingRegion = null;
+let drawStartImgX = 0;
+let drawStartImgY = 0;
+let hoveredCommentRegion = null;
+
+// Persistent annotation state
+let showAnnotations = true;
+let focusedCommentIndex = null;
+let editingRegionIndex = null;
+let editDragType = null;
+let editStartMouse = null;
+let editStartRegion = null;
+
+function initZoom() {
+  const img = document.getElementById('zoom-img');
+  const container = document.getElementById('zoom-container');
+  if (!img || !container) return;
+
+  zoomScale = 1; zoomX = 0; zoomY = 0; rotation = 0;
+  stagedRegion = null; drawingRegion = null; hoveredCommentRegion = null;
+
+  img.addEventListener('load', () => {
+    zoomNatW = img.naturalWidth;
+    zoomNatH = img.naturalHeight;
+    fitImage();
+  });
+  if (img.complete && img.naturalWidth) {
+    zoomNatW = img.naturalWidth;
+    zoomNatH = img.naturalHeight;
+    fitImage();
+  }
+
+  container.addEventListener('wheel', onZoomWheel, { passive: false });
+  container.addEventListener('mousedown', onPanStart);
+  container.addEventListener('dblclick', onZoomDblClick);
+}
+
+function fitImage() {
+  const container = document.getElementById('zoom-container');
+  const img = document.getElementById('zoom-img');
+  if (!container || !img || !zoomNatW) return;
+
+  const cw = container.clientWidth;
+  const ch = container.clientHeight;
+  const { visW, visH, rotOffX, rotOffY } = getVisualDims();
+  zoomFitScale = Math.min(cw / visW, ch / visH);
+  zoomScale = zoomFitScale;
+  zoomX = (cw - visW * zoomScale) / 2 - rotOffX * zoomScale;
+  zoomY = (ch - visH * zoomScale) / 2 - rotOffY * zoomScale;
+  applyZoom();
+  renderRegionOverlay();
+}
+
+function applyZoom() {
+  const img = document.getElementById('zoom-img');
+  if (!img) return;
+  const cx = zoomNatW / 2;
+  const cy = zoomNatH / 2;
+  const t = `translate(${zoomX}px, ${zoomY}px) scale(${zoomScale}) translate(${cx}px, ${cy}px) rotate(${rotation}deg) translate(${-cx}px, ${-cy}px)`;
+  img.style.transform = t;
+  img.style.width = zoomNatW + 'px';
+  img.style.height = zoomNatH + 'px';
+  const svg = document.getElementById('region-overlay');
+  if (svg) {
+    svg.style.transform = t;
+    svg.setAttribute('width', zoomNatW);
+    svg.setAttribute('height', zoomNatH);
+  }
+}
+
+function clampPan() {
+  const container = document.getElementById('zoom-container');
+  if (!container) return;
+  const cw = container.clientWidth;
+  const ch = container.clientHeight;
+  const { visW, visH, rotOffX, rotOffY } = getVisualDims();
+  const imgW = visW * zoomScale;
+  const imgH = visH * zoomScale;
+
+  // Work in terms of the effective visual position
+  let effX = zoomX + rotOffX * zoomScale;
+  let effY = zoomY + rotOffY * zoomScale;
+
+  if (imgW <= cw) {
+    effX = (cw - imgW) / 2;
+  } else {
+    effX = Math.min(0, Math.max(cw - imgW, effX));
+  }
+  if (imgH <= ch) {
+    effY = (ch - imgH) / 2;
+  } else {
+    effY = Math.min(0, Math.max(ch - imgH, effY));
+  }
+
+  zoomX = effX - rotOffX * zoomScale;
+  zoomY = effY - rotOffY * zoomScale;
+}
+
+function onZoomWheel(e) {
+  e.preventDefault();
+  const container = document.getElementById('zoom-container');
+  if (!container || !zoomNatW) return;
+
+  if (e.ctrlKey) {
+    // Pinch-to-zoom (trackpad pinch fires wheel with ctrlKey)
+    const rect = container.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    const oldScale = zoomScale;
+    // Pinch deltaY is usually smaller, so use a gentler factor
+    const factor = Math.exp(-e.deltaY * 0.01);
+    let newScale = zoomScale * factor;
+
+    const minScale = zoomFitScale * 0.95;
+    const maxScale = Math.max(zoomFitScale * 8, 4);
+    newScale = Math.max(minScale, Math.min(maxScale, newScale));
+
+    zoomX = mx - (mx - zoomX) * (newScale / oldScale);
+    zoomY = my - (my - zoomY) * (newScale / oldScale);
+    zoomScale = newScale;
+  } else {
+    // Two-finger scroll → pan
+    zoomX -= e.deltaX;
+    zoomY -= e.deltaY;
+  }
+
+  clampPan();
+  applyZoom();
+}
+
+function onZoomDblClick(e) {
+  const container = document.getElementById('zoom-container');
+  if (!container || !zoomNatW) return;
+
+  const isZoomed = zoomScale > zoomFitScale * 1.02;
+  if (isZoomed) {
+    fitImage();
+  } else {
+    // Zoom to 1:1 centered on click point
+    const rect = container.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const oldScale = zoomScale;
+    const newScale = Math.max(1, zoomFitScale * 3);
+    zoomX = mx - (mx - zoomX) * (newScale / oldScale);
+    zoomY = my - (my - zoomY) * (newScale / oldScale);
+    zoomScale = newScale;
+    clampPan();
+    applyZoom();
+  }
+}
+
+function onPanStart(e) {
+  // Check if click is on an SVG region element
+  const target = e.target;
+  if (target.dataset && target.dataset.regionIdx !== undefined) {
+    const idx = parseInt(target.dataset.regionIdx, 10);
+    e.preventDefault();
+    editingRegionIndex = idx;
+
+    // Determine drag type from click position relative to region edges
+    const comment = (files[currentIndex].comments || [])[idx];
+    if (comment && comment.region) {
+      const clickPt = viewportToImgPct(e.clientX, e.clientY);
+      const r = comment.region;
+      const edgePct = Math.max(1.5, Math.min(4, Math.min(r.w, r.h) * 0.2)); // % threshold for edges
+      const nearL = clickPt.x - r.x < edgePct;
+      const nearR = (r.x + r.w) - clickPt.x < edgePct;
+      const nearT = clickPt.y - r.y < edgePct;
+      const nearB = (r.y + r.h) - clickPt.y < edgePct;
+
+      let dragType = 'move';
+      if (nearT && nearL) dragType = 'nw';
+      else if (nearT && nearR) dragType = 'ne';
+      else if (nearB && nearL) dragType = 'sw';
+      else if (nearB && nearR) dragType = 'se';
+      else if (nearT) dragType = 'n';
+      else if (nearB) dragType = 's';
+      else if (nearL) dragType = 'w';
+      else if (nearR) dragType = 'e';
+
+      onEditStart(e, idx, dragType);
+    } else {
+      onEditStart(e, idx, 'move');
+    }
+    return;
+  }
+
+  // Click was outside all regions — deselect and draw
+  if (editingRegionIndex !== null) {
+    editingRegionIndex = null;
+    renderRegionOverlay();
+  }
+  onDrawStart(e);
+}
+
+function onEditStart(e, idx, type) {
+  editDragType = type;
+  editingRegionIndex = idx;
+  const comments = files[currentIndex].comments || [];
+  editStartRegion = { ...comments[idx].region };
+  editStartMouse = viewportToImgPct(e.clientX, e.clientY);
+
+  const onMove = (ev) => {
+    const cur = viewportToImgPct(ev.clientX, ev.clientY);
+    const dx = cur.x - editStartMouse.x;
+    const dy = cur.y - editStartMouse.y;
+    const r = editStartRegion;
+    const comment = files[currentIndex].comments[idx];
+
+    if (editDragType === 'move') {
+      comment.region = {
+        x: Math.max(0, Math.min(100 - r.w, r.x + dx)),
+        y: Math.max(0, Math.min(100 - r.h, r.y + dy)),
+        w: r.w,
+        h: r.h,
+      };
+    } else {
+      let nx = r.x, ny = r.y, nw = r.w, nh = r.h;
+      // Left edge moves
+      if (editDragType === 'nw' || editDragType === 'sw' || editDragType === 'w') {
+        nx = Math.max(0, Math.min(r.x + r.w - 2, r.x + dx));
+        nw = r.w - (nx - r.x);
+      }
+      // Right edge moves
+      if (editDragType === 'ne' || editDragType === 'se' || editDragType === 'e') {
+        nw = Math.max(2, r.w + dx);
+      }
+      // Top edge moves
+      if (editDragType === 'nw' || editDragType === 'ne' || editDragType === 'n') {
+        ny = Math.max(0, Math.min(r.y + r.h - 2, r.y + dy));
+        nh = r.h - (ny - r.y);
+      }
+      // Bottom edge moves
+      if (editDragType === 'sw' || editDragType === 'se' || editDragType === 's') {
+        nh = Math.max(2, r.h + dy);
+      }
+      comment.region = { x: nx, y: ny, w: Math.min(100 - nx, nw), h: Math.min(100 - ny, nh) };
+    }
+    renderRegionOverlay();
+  };
+
+  const onUp = async () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    editDragType = null;
+    editStartMouse = null;
+    editStartRegion = null;
+    // Save to server
+    const file = files[currentIndex];
+    const comment = file.comments[idx];
+    try {
+      await api(`/api/files/${encodeURIComponent(file.name)}/comments/${idx}/region`, {
+        method: 'PUT',
+        body: { region: comment.region },
+      });
+    } catch (err) {
+      console.error('Failed to save region edit:', err);
+    }
+  };
+
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+  renderRegionOverlay();
+}
+
+// ── Region Drawing ──
+function viewportToImgPct(clientX, clientY) {
+  const container = document.getElementById('zoom-container');
+  const rect = container.getBoundingClientRect();
+  const vpX = clientX - rect.left;
+  const vpY = clientY - rect.top;
+  // Undo translate and scale
+  let rawX = (vpX - zoomX) / zoomScale;
+  let rawY = (vpY - zoomY) / zoomScale;
+  // Undo rotation around image center
+  const cx = zoomNatW / 2;
+  const cy = zoomNatH / 2;
+  let rx = rawX - cx;
+  let ry = rawY - cy;
+  if (rotation === 90)  { [rx, ry] = [ry, -rx]; }
+  else if (rotation === 180) { [rx, ry] = [-rx, -ry]; }
+  else if (rotation === 270) { [rx, ry] = [-ry, rx]; }
+  const imgX = rx + cx;
+  const imgY = ry + cy;
+  return {
+    x: Math.max(0, Math.min(100, (imgX / zoomNatW) * 100)),
+    y: Math.max(0, Math.min(100, (imgY / zoomNatH) * 100)),
+  };
+}
+
+function onDrawStart(e) {
+  e.preventDefault();
+  const start = viewportToImgPct(e.clientX, e.clientY);
+  drawStartImgX = start.x;
+  drawStartImgY = start.y;
+  drawingRegion = { x: start.x, y: start.y, w: 0, h: 0 };
+
+  const onMove = (ev) => {
+    const cur = viewportToImgPct(ev.clientX, ev.clientY);
+    drawingRegion = {
+      x: Math.min(drawStartImgX, cur.x),
+      y: Math.min(drawStartImgY, cur.y),
+      w: Math.abs(cur.x - drawStartImgX),
+      h: Math.abs(cur.y - drawStartImgY),
+    };
+    renderRegionOverlay();
+  };
+
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+
+    // Only stage if region is big enough (>2% in both dims)
+    if (drawingRegion && drawingRegion.w > 2 && drawingRegion.h > 2) {
+      stagedRegion = { ...drawingRegion };
+      drawingRegion = null;
+      renderRegionOverlay();
+      updateStagedRegionUI();
+      document.getElementById('comment-input').focus();
+    } else {
+      drawingRegion = null;
+      renderRegionOverlay();
+    }
+  };
+
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+function renderRegionOverlay() {
+  const svg = document.getElementById('region-overlay');
+  if (!svg || !zoomNatW) return;
+
+  let rects = '';
+  const handleSize = Math.max(8, Math.round(zoomNatW / 200));
+
+  // 1. Drawing region (active drag)
+  if (drawingRegion) {
+    const r = drawingRegion;
+    const x = (r.x / 100) * zoomNatW;
+    const y = (r.y / 100) * zoomNatH;
+    const w = (r.w / 100) * zoomNatW;
+    const h = (r.h / 100) * zoomNatH;
+    rects += `<rect x="${x}" y="${y}" width="${w}" height="${h}" class="region-rect-drawing"/>`;
+  }
+
+  // 2. Staged region (ready to attach to comment)
+  if (stagedRegion) {
+    const r = stagedRegion;
+    const x = (r.x / 100) * zoomNatW;
+    const y = (r.y / 100) * zoomNatH;
+    const w = (r.w / 100) * zoomNatW;
+    const h = (r.h / 100) * zoomNatH;
+    rects += `<rect x="${x}" y="${y}" width="${w}" height="${h}" class="region-rect-staged"/>`;
+  }
+
+  // 3. Persistent comment regions
+  if (showAnnotations && files[currentIndex]) {
+    const comments = files[currentIndex].comments || [];
+    comments.forEach((c, i) => {
+      if (!c.region) return;
+      const r = c.region;
+      const x = (r.x / 100) * zoomNatW;
+      const y = (r.y / 100) * zoomNatH;
+      const w = (r.w / 100) * zoomNatW;
+      const h = (r.h / 100) * zoomNatH;
+
+      // Determine class based on focus state
+      let cls = 'region-rect-persistent';
+      if (focusedCommentIndex === i) cls = 'region-rect-focused';
+      else if (focusedCommentIndex !== null) cls = 'region-rect-dimmed';
+
+      // Body rect — pointer-events for hover + drag-to-move/resize
+      // Cursor is set to 'move' by default; dynamic cursor update on mousemove handles edge cursors
+      rects += `<rect x="${x}" y="${y}" width="${w}" height="${h}" class="${cls}" data-region-idx="${i}" style="pointer-events:all;cursor:move"/>`;
+
+      // Label
+      const fontSize = Math.max(12, Math.round(zoomNatW / 150));
+      const labelText = `#${i + 1}`;
+      const labelW = fontSize * labelText.length * 0.65 + 8;
+      const labelH = fontSize + 6;
+      const labelOpacity = cls === 'region-rect-dimmed' ? 0.15 : (cls === 'region-rect-focused' ? 1 : 0.7);
+      rects += `<rect x="${x}" y="${y - labelH}" width="${labelW}" height="${labelH}" fill="#00ff66" rx="2" style="pointer-events:none;opacity:${labelOpacity}"/>`;
+      rects += `<text x="${x + 4}" y="${y - 4}" fill="black" font-size="${fontSize}" font-weight="bold" font-family="-apple-system,sans-serif" style="pointer-events:none;opacity:${labelOpacity}">${labelText}</text>`;
+    });
+  }
+
+  svg.innerHTML = rects;
+
+  // Attach hover listeners on persistent rects for focus/dim + dynamic cursor
+  if (showAnnotations) {
+    svg.querySelectorAll('[data-region-idx]').forEach(el => {
+      el.addEventListener('mouseenter', () => {
+        if (editDragType) return; // don't change focus while dragging/resizing
+        const idx = parseInt(el.dataset.regionIdx, 10);
+        if (focusedCommentIndex !== idx) {
+          focusedCommentIndex = idx;
+          highlightSidebarComment(idx);
+          renderRegionOverlay();
+        }
+      });
+      el.addEventListener('mouseleave', () => {
+        if (editDragType) return; // don't change focus while dragging/resizing
+        if (focusedCommentIndex !== null) {
+          focusedCommentIndex = null;
+          highlightSidebarComment(null);
+          renderRegionOverlay();
+        }
+      });
+      // Dynamic cursor based on position within rect
+      el.addEventListener('mousemove', (ev) => {
+        const idx = parseInt(el.dataset.regionIdx, 10);
+        const comment = (files[currentIndex].comments || [])[idx];
+        if (!comment || !comment.region) return;
+        const pt = viewportToImgPct(ev.clientX, ev.clientY);
+        const r = comment.region;
+        const edgePct = Math.max(1.5, Math.min(4, Math.min(r.w, r.h) * 0.2));
+        const nearL = pt.x - r.x < edgePct;
+        const nearR = (r.x + r.w) - pt.x < edgePct;
+        const nearT = pt.y - r.y < edgePct;
+        const nearB = (r.y + r.h) - pt.y < edgePct;
+        let cursor = 'move';
+        if ((nearT && nearL) || (nearB && nearR)) cursor = 'nwse-resize';
+        else if ((nearT && nearR) || (nearB && nearL)) cursor = 'nesw-resize';
+        else if (nearT || nearB) cursor = 'ns-resize';
+        else if (nearL || nearR) cursor = 'ew-resize';
+        el.style.cursor = cursor;
+      });
+    });
+  }
+}
+
+// Highlight a comment in the sidebar by index
+function highlightSidebarComment(idx) {
+  document.querySelectorAll('#comments-list .comment').forEach((el, i) => {
+    if (idx === null) {
+      el.style.opacity = '';
+      el.style.outline = '';
+    } else if (i === idx) {
+      el.style.opacity = '1';
+      el.style.outline = '1px solid #00ff66';
+      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    } else {
+      el.style.opacity = '0.3';
+      el.style.outline = '';
+    }
+  });
+}
+
+function updateStagedRegionUI() {
+  let el = document.getElementById('staged-region-bar');
+  if (stagedRegion) {
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'staged-region-bar';
+      el.className = 'region-clear';
+      el.innerHTML = '<span>Region selected</span><span class="region-clear-x">&times;</span>';
+      el.addEventListener('click', clearStagedRegion);
+      const inputArea = document.querySelector('.sidebar-input');
+      inputArea.insertBefore(el, inputArea.firstChild);
+    }
+  } else {
+    if (el) el.remove();
+  }
+}
+
+function clearStagedRegion() {
+  stagedRegion = null;
+  renderRegionOverlay();
+  updateStagedRegionUI();
+}
+
+function rotateCanvas(dir) {
+  rotation = (rotation + dir + 360) % 360;
+  fitImage();
+  renderRegionOverlay();
+}
+
+// Re-fit on window resize
+window.addEventListener('resize', () => {
+  if (galleryMode && document.getElementById('zoom-container')) {
+    fitImage();
+  }
+});
+
+// ── Sidebar resize ──
+(() => {
+  const handle = document.getElementById('sidebar-resize-handle');
+  const sidebar = document.getElementById('gallery-sidebar');
+  if (!handle || !sidebar) return;
+  let startX, startW;
+  handle.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    startX = e.clientX;
+    startW = sidebar.offsetWidth;
+    handle.classList.add('active');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    const onMove = (ev) => {
+      const delta = startX - ev.clientX; // dragging left = wider
+      const newW = Math.max(260, Math.min(window.innerWidth * 0.6, startW + delta));
+      sidebar.style.width = newW + 'px';
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      handle.classList.remove('active');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      // Re-fit image after sidebar resize
+      if (galleryMode && document.getElementById('zoom-container')) {
+        fitImage();
+      }
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+})();
+
 // ── Event Listeners ──
 document.getElementById('btn-add-context').addEventListener('click', startAddContext);
 document.getElementById('btn-back').addEventListener('click', exitGallery);
 document.getElementById('btn-add-comment').addEventListener('click', addComment);
-document.getElementById('btn-skip').addEventListener('click', skipFile);
-document.getElementById('btn-next-file').addEventListener('click', goNext);
 document.getElementById('nav-prev').addEventListener('click', goPrev);
 document.getElementById('nav-next').addEventListener('click', goNext);
+document.getElementById('btn-rotate-ccw').addEventListener('click', () => rotateCanvas(-90));
+document.getElementById('btn-rotate-cw').addEventListener('click', () => rotateCanvas(90));
+document.getElementById('btn-toggle-annotations').addEventListener('click', () => {
+  showAnnotations = !showAnnotations;
+  document.getElementById('btn-toggle-annotations').classList.toggle('off', !showAnnotations);
+  renderRegionOverlay();
+});
 
 // Comment input: Cmd+Enter or Ctrl+Enter to submit
 document.getElementById('comment-input').addEventListener('keydown', (e) => {
@@ -1039,8 +2003,8 @@ document.querySelectorAll('.filter-btn').forEach(btn => {
 
 // Keyboard shortcuts
 document.addEventListener('keydown', (e) => {
-  // Don't intercept when typing in input
-  if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') {
+  // Don't intercept when typing in input or using modifier keys (Cmd+R, Ctrl+R, etc.)
+  if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT' || e.metaKey || e.ctrlKey) {
     return;
   }
 
@@ -1056,7 +2020,17 @@ document.addEventListener('keydown', (e) => {
     case '/': document.getElementById('comment-input').focus(); e.preventDefault(); break;
     case 'r': case 'R': toggleRecording(); e.preventDefault(); break;
     case 's': case 'S': skipFile(); e.preventDefault(); break;
-    case 'Escape': exitGallery(); e.preventDefault(); break;
+    case 'Escape':
+      if (editingRegionIndex !== null) {
+        editingRegionIndex = null;
+        renderRegionOverlay();
+      } else {
+        exitGallery();
+      }
+      e.preventDefault();
+      break;
+    case '[': rotateCanvas(-90); e.preventDefault(); break;
+    case ']': rotateCanvas(90); e.preventDefault(); break;
   }
 });
 
@@ -1225,44 +2199,6 @@ function toggleRecording() {
 document.getElementById('btn-mic').addEventListener('click', toggleRecording);
 initVoice();
 
-// ── Auto-refresh on external changes ──
-let lastContextHash = '';
-let pollInterval = null;
-
-async function getContextHash() {
-  const ctx = await api('/api/context');
-  return JSON.stringify(ctx);
-}
-
-async function pollForChanges() {
-  try {
-    const hash = await getContextHash();
-    if (lastContextHash && hash !== lastContextHash) {
-      // Context changed externally — refresh
-      const updated = await api('/api/files');
-      files = updated;
-      updateProgress();
-      if (galleryMode) renderGalleryItem();
-      else renderGrid();
-    }
-    lastContextHash = hash;
-    // Also refresh summary if siderail is open and not being edited
-    if (summaryVisible && !summaryEditMode) {
-      loadSummary();
-    }
-  } catch (e) { /* ignore fetch errors */ }
-}
-
-function startPolling() {
-  if (pollInterval) return;
-  getContextHash().then(h => lastContextHash = h);
-  pollInterval = setInterval(pollForChanges, 2000);
-}
-
-function stopPolling() {
-  if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
-}
-
 // ── Settings ──
 let hasApiKey = false;
 
@@ -1338,6 +2274,224 @@ document.getElementById('btn-ask-claude').addEventListener('click', async () => 
     files = updated;
     updateProgress();
     renderGalleryItem();
+  }
+});
+
+// ── Auto-Annotate ──
+document.getElementById('btn-auto-annotate').addEventListener('click', async () => {
+  if (!hasApiKey) {
+    document.getElementById('btn-settings').click();
+    return;
+  }
+  const file = files[currentIndex];
+  if (!file) return;
+
+  const btn = document.getElementById('btn-auto-annotate');
+  const btnSvg = btn.innerHTML;
+  btn.disabled = true;
+  btn.classList.add('loading');
+
+  try {
+    const res = await api(`/api/files/${encodeURIComponent(file.name)}/auto-annotate`, { method: 'POST' });
+    if (res.error) {
+      alert('Error: ' + res.error);
+    }
+  } catch (e) {
+    alert('Failed to auto-annotate: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = btnSvg;
+    btn.classList.remove('loading');
+    const updated = await api('/api/files');
+    files = updated;
+    updateProgress();
+    renderGalleryItem();
+  }
+});
+
+// ── Copy Helpers ──
+async function copyImageToClipboard(blob, btn, label) {
+  const originalHtml = btn.innerHTML;
+  try {
+    await navigator.clipboard.write([
+      new ClipboardItem({ 'image/png': blob }),
+    ]);
+    btn.style.opacity = '0.5';
+  } catch (e) {
+    console.error('Copy failed:', e);
+    btn.style.opacity = '0.5';
+  }
+  setTimeout(() => { btn.innerHTML = originalHtml; btn.style.opacity = ''; btn.disabled = false; }, 1500);
+}
+
+// Word-wrap text onto canvas, returns array of lines
+function wrapText(ctx, text, maxWidth) {
+  const words = text.split(/\s+/);
+  const lines = [];
+  let line = '';
+  for (const word of words) {
+    const test = line ? line + ' ' + word : word;
+    if (ctx.measureText(test).width > maxWidth && line) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = test;
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+// ── Copy (plain image) ──
+document.getElementById('btn-copy-image').addEventListener('click', async () => {
+  const file = files[currentIndex];
+  if (!file) return;
+  const btn = document.getElementById('btn-copy-image');
+  const originalHtml = btn.innerHTML;
+  btn.style.opacity = '0.5';
+  btn.disabled = true;
+
+  try {
+    const img = document.getElementById('zoom-img');
+    if (!img || !img.naturalWidth) throw new Error('Image not ready');
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    canvas.getContext('2d').drawImage(img, 0, 0);
+    const blob = await new Promise((res, rej) =>
+      canvas.toBlob(b => b ? res(b) : rej(), 'image/png'));
+    await copyImageToClipboard(blob, btn, 'Copy');
+  } catch (e) {
+    console.error('Copy image failed:', e);
+    btn.style.opacity = '0.5';
+    setTimeout(() => { btn.innerHTML = originalHtml; btn.style.opacity = ''; btn.disabled = false; }, 1500);
+  }
+});
+
+// ── Copy+ (annotated image with comment legend) ──
+document.getElementById('btn-copy-context').addEventListener('click', async () => {
+  const file = files[currentIndex];
+  if (!file) return;
+  const btn = document.getElementById('btn-copy-context');
+  const originalHtml = btn.innerHTML;
+  btn.style.opacity = '0.5';
+  btn.disabled = true;
+
+  try {
+    const img = document.getElementById('zoom-img');
+    if (!img || !img.naturalWidth) throw new Error('Image not ready');
+
+    const natW = img.naturalWidth;
+    const natH = img.naturalHeight;
+    const comments = file.comments || [];
+
+    // --- Measure the legend area ---
+    const legendPad = Math.round(natW * 0.03);
+    const fontSize = Math.max(14, Math.round(natW / 100));
+    const lineHeight = Math.round(fontSize * 1.5);
+    const maxTextW = natW - legendPad * 2;
+
+    // Pre-compute wrapped lines for each comment
+    const measureCanvas = document.createElement('canvas');
+    const measureCtx = measureCanvas.getContext('2d');
+    measureCtx.font = `${fontSize}px -apple-system, system-ui, sans-serif`;
+    const boldMeasureCtx = measureCanvas.getContext('2d');
+
+    const commentBlocks = comments.map((c, i) => {
+      const prefix = `#${i + 1} (${c.author}): `;
+      const regionTag = c.region ? ` [region ${Math.round(c.region.x)}%-${Math.round(c.region.x + c.region.w)}% x, ${Math.round(c.region.y)}%-${Math.round(c.region.y + c.region.h)}% y]` : '';
+      const fullText = prefix + c.text + regionTag;
+      const lines = wrapText(measureCtx, fullText, maxTextW);
+      return { index: i, comment: c, prefix, lines };
+    });
+
+    const totalLines = commentBlocks.reduce((sum, b) => sum + b.lines.length, 0);
+    const titleLineH = Math.round(fontSize * 1.8);
+    const legendH = titleLineH + totalLines * lineHeight + legendPad * 2 + (commentBlocks.length - 1) * Math.round(lineHeight * 0.3);
+
+    // --- Draw everything ---
+    const canvas = document.createElement('canvas');
+    canvas.width = natW;
+    canvas.height = natH + (comments.length > 0 ? legendH : 0);
+    const ctx = canvas.getContext('2d');
+
+    // Draw image
+    ctx.drawImage(img, 0, 0, natW, natH);
+
+    // Draw region rectangles on image
+    ctx.strokeStyle = '#00ff66';
+    ctx.lineWidth = Math.max(5, Math.round(natW / 300));
+    comments.filter(c => c.region).forEach(c => {
+      const r = c.region;
+      const x = (r.x / 100) * natW;
+      const y = (r.y / 100) * natH;
+      const w = (r.w / 100) * natW;
+      const h = (r.h / 100) * natH;
+      ctx.strokeRect(x, y, w, h);
+      const label = `#${comments.indexOf(c) + 1}`;
+      const labelFontSize = Math.max(16, Math.round(natW / 120));
+      ctx.font = `bold ${labelFontSize}px -apple-system, sans-serif`;
+      const metrics = ctx.measureText(label);
+      const pad = 4;
+      ctx.fillStyle = '#00ff66';
+      ctx.fillRect(x, y - labelFontSize - pad * 2, metrics.width + pad * 2, labelFontSize + pad * 2);
+      ctx.fillStyle = 'black';
+      ctx.fillText(label, x + pad, y - pad);
+    });
+
+    // Draw legend below image
+    if (comments.length > 0) {
+      // Dark background
+      ctx.fillStyle = '#1a1a2e';
+      ctx.fillRect(0, natH, natW, legendH);
+
+      // Title
+      ctx.fillStyle = '#00ff66';
+      ctx.font = `bold ${Math.round(fontSize * 1.2)}px -apple-system, system-ui, sans-serif`;
+      ctx.fillText(`Annotations — ${file.name}`, legendPad, natH + legendPad + fontSize);
+
+      // Separator line
+      const sepY = natH + titleLineH + legendPad * 0.5;
+      ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(legendPad, sepY);
+      ctx.lineTo(natW - legendPad, sepY);
+      ctx.stroke();
+
+      // Comment text
+      let curY = natH + titleLineH + legendPad;
+      ctx.font = `${fontSize}px -apple-system, system-ui, sans-serif`;
+
+      commentBlocks.forEach((block, bi) => {
+        block.lines.forEach((line, li) => {
+          curY += lineHeight;
+          if (li === 0) {
+            // First line: draw the #N prefix in accent color
+            const prefixW = ctx.measureText(block.prefix).width;
+            ctx.fillStyle = '#00ff66';
+            ctx.font = `bold ${fontSize}px -apple-system, system-ui, sans-serif`;
+            ctx.fillText(block.prefix, legendPad, curY);
+            ctx.fillStyle = 'rgba(255,255,255,0.9)';
+            ctx.font = `${fontSize}px -apple-system, system-ui, sans-serif`;
+            ctx.fillText(line.slice(block.prefix.length), legendPad + prefixW, curY);
+          } else {
+            ctx.fillStyle = 'rgba(255,255,255,0.9)';
+            ctx.fillText(line, legendPad, curY);
+          }
+        });
+        curY += Math.round(lineHeight * 0.3); // gap between comments
+      });
+    }
+
+    // Export and copy
+    const blob = await new Promise((res, rej) =>
+      canvas.toBlob(b => b ? res(b) : rej(new Error('toBlob failed')), 'image/png'));
+    await copyImageToClipboard(blob, btn, 'Copy+');
+  } catch (e) {
+    console.error('Copy+ failed:', e);
+    btn.style.opacity = '0.5';
+    setTimeout(() => { btn.innerHTML = originalHtml; btn.style.opacity = ''; btn.disabled = false; }, 1500);
   }
 });
 
@@ -1553,7 +2707,6 @@ document.getElementById('summary-content').addEventListener('click', (e) => {
 // ── Init ──
 loadConfig();
 loadFiles();
-startPolling();
 checkApiKey();
 </script>
 </body>

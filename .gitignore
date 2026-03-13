@@ -9,3 +9,6 @@ node_modules/
 
 # Bun lockfile
 bun.lockb
+
+# Generated thumbnails (cached in session folders)
+.thumbs/
