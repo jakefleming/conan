@@ -2,6 +2,7 @@ import { readdir, readFile, writeFile, stat, mkdir } from "fs/promises";
 import { join, extname, basename, dirname, normalize } from "path";
 import { existsSync } from "fs";
 import sharp from "sharp";
+import JSZip from "jszip";
 
 const ALLOWED_EXTENSIONS = new Set([
   ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif",
@@ -86,6 +87,51 @@ function parseImageDimensions(buffer: Buffer, ext: string): { width: number; hei
   } catch {
     return null;
   }
+}
+
+// Resize an image buffer so the base64 encoding stays under Claude's 5MB limit.
+// Base64 adds ~33% overhead, so we target ~3.75MB raw.
+const MAX_API_IMAGE_BYTES = 3_750_000;
+async function resizeForApi(buf: Buffer, mediaType: string): Promise<Buffer> {
+  if (buf.length <= MAX_API_IMAGE_BYTES) return buf;
+  let img = sharp(buf);
+  const meta = await img.metadata();
+  let w = meta.width!;
+  let h = meta.height!;
+  // Progressively scale down by 70% until under limit
+  while (buf.length > MAX_API_IMAGE_BYTES) {
+    w = Math.round(w * 0.7);
+    h = Math.round(h * 0.7);
+    if (mediaType.includes("png")) {
+      buf = await sharp(buf).resize(w, h).png().toBuffer();
+    } else {
+      buf = await sharp(buf).resize(w, h).jpeg({ quality: 85 }).toBuffer();
+    }
+  }
+  return buf;
+}
+
+async function cropRegion(filePath: string, region: { x: number; y: number; w: number; h: number }): Promise<Buffer> {
+  const metadata = await sharp(filePath).metadata();
+  const imgW = metadata.width!;
+  const imgH = metadata.height!;
+  const cropX = Math.round((region.x / 100) * imgW);
+  const cropY = Math.round((region.y / 100) * imgH);
+  const cropW = Math.min(Math.round((region.w / 100) * imgW), imgW - cropX);
+  const cropH = Math.min(Math.round((region.h / 100) * imgH), imgH - cropY);
+  return sharp(filePath)
+    .extract({ left: cropX, top: cropY, width: Math.max(1, cropW), height: Math.max(1, cropH) })
+    .png()
+    .toBuffer();
+}
+
+function sanitizeFilename(text: string): string {
+  return text
+    .replace(/[^a-zA-Z0-9\s_-]/g, '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .toLowerCase()
+    .substring(0, 60) || 'region';
 }
 
 async function computeFileHash(filePath: string): Promise<string> {
@@ -199,9 +245,10 @@ async function askClaude(relPath: string): Promise<string> {
   const content: any[] = [];
 
   if (isImage) {
-    const imageData = await readFile(filePath);
-    const base64 = imageData.toString("base64");
+    const imageDataRaw = await readFile(filePath);
     const mediaType = ext === ".png" ? "image/png" : ext === ".gif" ? "image/gif" : ext === ".webp" ? "image/webp" : "image/jpeg";
+    const imageData = await resizeForApi(Buffer.from(imageDataRaw), mediaType);
+    const base64 = imageData.toString("base64");
     content.push({
       type: "image",
       source: { type: "base64", media_type: mediaType, data: base64 },
@@ -285,12 +332,13 @@ async function autoAnnotate(relPath: string): Promise<{ region: Region; text: st
       }).join("\n");
   }
 
-  const imageData = await readFile(filePath);
-  const base64 = imageData.toString("base64");
+  const imageDataRaw = await readFile(filePath);
   const mediaType = ext === ".png" ? "image/png" : ext === ".gif" ? "image/gif" : ext === ".webp" ? "image/webp" : "image/jpeg";
+  const imageData = await resizeForApi(Buffer.from(imageDataRaw), mediaType);
+  const base64 = imageData.toString("base64");
 
-  // Parse image dimensions from file headers
-  const dims = parseImageDimensions(imageData, ext);
+  // Parse image dimensions from file headers (use original for accurate dims)
+  const dims = parseImageDimensions(imageDataRaw, ext);
   const dimsInfo = dims ? `\n\nImage dimensions: ${dims.width}×${dims.height} pixels (aspect ratio ${dims.width > dims.height ? 'landscape' : dims.height > dims.width * 1.5 ? 'tall/portrait' : 'portrait'}).` : "";
 
   const messages = [{
@@ -502,6 +550,36 @@ async function collectAllContexts(dir: string, relPath: string): Promise<{ dir: 
   return results;
 }
 
+const TEXT_EXTENSIONS = new Set([".md", ".txt"]);
+const MAX_DOC_SIZE = 50000; // 50KB per document to avoid blowing up the prompt
+
+async function collectTextDocuments(dir: string, relPath: string, recursive: boolean = false): Promise<{ path: string; content: string }[]> {
+  const results: { path: string; content: string }[] = [];
+  const absDir = join(resolvedFolder, relPath);
+  try {
+    const entries = await readdir(absDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue;
+      const ext = extname(entry.name).toLowerCase();
+      if (entry.isFile() && TEXT_EXTENSIONS.has(ext)) {
+        // Skip SUMMARY.md — that's our own output
+        if (entry.name === "SUMMARY.md") continue;
+        try {
+          const filePath = join(absDir, entry.name);
+          const content = await readFile(filePath, "utf-8");
+          const displayPath = relPath ? `${relPath}/${entry.name}` : entry.name;
+          results.push({ path: displayPath, content: content.slice(0, MAX_DOC_SIZE) });
+        } catch {}
+      }
+      if (recursive && entry.isDirectory() && !HIDDEN_DIRS.has(entry.name)) {
+        const childRel = relPath ? `${relPath}/${entry.name}` : entry.name;
+        results.push(...await collectTextDocuments(join(absDir, entry.name), childRel, true));
+      }
+    }
+  } catch {}
+  return results;
+}
+
 async function generateSummary(subdir: string = "", aggregate: boolean = false): Promise<{ content: string; version: number }> {
   if (pendingGenerate) throw new Error("Summary generation already in progress.");
   pendingGenerate = true;
@@ -575,10 +653,21 @@ RULES:
    - Quoted phrases must be 5-15 words extracted VERBATIM from the comment text.
    - INDEX must match the #N shown next to the comment author tag (e.g. [USER, #0] means index 0).
    - Use image references when discussing a specific file's content.
-   - Every bullet point in "File-by-File Notes" and each item in "Screens and Components to Design" must include at least one comment citation.`;
+   - Every bullet point in "File-by-File Notes" and each item in "Screens and Components to Design" must include at least one comment citation.
+12. If text documents (markdown, txt files) are provided alongside annotations, use them as context to enrich your summary. Reference relevant document content where it adds clarity (e.g. "per notes.md, the team decided X"). These documents are authoritative context written by the team.`;
+
+    // Collect text documents from the directory
+    const textDocs = await collectTextDocuments(resolvedFolder, subdir, aggregate);
+    let docsDump = "";
+    if (textDocs.length > 0) {
+      docsDump = "\n\nDOCUMENTS FOUND IN DIRECTORY:\n";
+      for (const doc of textDocs) {
+        docsDump += `\n### ${doc.path}\n\`\`\`\n${doc.content}\n\`\`\`\n`;
+      }
+    }
 
     const prompt = `${summaryPrompt}
-
+${docsDump ? `\nIMPORTANT: The following text documents were found alongside the images. Use them as additional context — they may contain meeting notes, requirements, project context, or domain knowledge that helps you write a better summary. Reference them where relevant.\n${docsDump}` : ""}
 ANNOTATIONS:
 ${annotationDump}`;
 
@@ -868,23 +957,16 @@ const server = Bun.serve({
         const ext = extname(base).toLowerCase();
         if (!IMAGE_EXTENSIONS.has(ext)) return json({ error: "Only images supported" }, 400);
 
-        // Crop the image to the region using sharp
-        const img = sharp(filePath);
-        const metadata = await img.metadata();
-        const imgW = metadata.width!;
-        const imgH = metadata.height!;
+        // Crop the image to the region
+        const croppedBufferRaw = await cropRegion(filePath, region);
+        const croppedBuffer = await resizeForApi(croppedBufferRaw, "image/png");
+        const croppedBase64 = croppedBuffer.toString("base64");
 
-        const cropX = Math.round((region.x / 100) * imgW);
-        const cropY = Math.round((region.y / 100) * imgH);
-        const cropW = Math.min(Math.round((region.w / 100) * imgW), imgW - cropX);
-        const cropH = Math.min(Math.round((region.h / 100) * imgH), imgH - cropY);
-
-        const croppedBuffer = await sharp(filePath)
-          .extract({ left: cropX, top: cropY, width: Math.max(1, cropW), height: Math.max(1, cropH) })
-          .png()
-          .toBuffer();
-
-        const base64Data = croppedBuffer.toString("base64");
+        // Also send the full image for context (resized if needed)
+        const fullMediaType = ext === ".png" ? "image/png" : ext === ".gif" ? "image/gif" : ext === ".webp" ? "image/webp" : "image/jpeg";
+        const fullImageRaw = await readFile(filePath);
+        const fullImageResized = await resizeForApi(Buffer.from(fullImageRaw), fullMediaType);
+        const fullBase64 = fullImageResized.toString("base64");
 
         // Build existing comments context
         const context = await readContext(dir);
@@ -909,16 +991,28 @@ const server = Bun.serve({
               role: "user",
               content: [
                 {
+                  type: "text",
+                  text: "Here is the full image for context:",
+                },
+                {
                   type: "image",
-                  source: { type: "base64", media_type: "image/png", data: base64Data },
+                  source: { type: "base64", media_type: fullMediaType, data: fullBase64 },
                 },
                 {
                   type: "text",
-                  text: `This is a cropped region from a larger image. Describe what you see. Be concise — 1-2 sentences.${existingContext}
+                  text: "Now here is the specific cropped region the user selected:",
+                },
+                {
+                  type: "image",
+                  source: { type: "base64", media_type: "image/png", data: croppedBase64 },
+                },
+                {
+                  type: "text",
+                  text: `Describe what's in the cropped region. Use the full image for context (e.g. what app/screen/document this is from), but focus your description on the cropped region specifically. Be concise — 1-2 sentences.${existingContext}
 
 Focus on:
-- If there's text: transcribe it
-- If there's a diagram, UI element, or sketch: describe what it shows
+- If there's text: transcribe it and explain its context
+- If there's a diagram, UI element, or sketch: describe what it shows and its role in the larger image
 
 Return ONLY your description, no labels or prefixes.`,
                 },
@@ -1007,13 +1101,16 @@ Return ONLY your description, no labels or prefixes.`,
         for (const dirName of directories) {
           const subPath = dirParam ? `${dirParam}/${dirName}` : dirName;
           const subCtx = await readContext(subPath);
-          const fileCount = (await listFiles(subPath)).files.length;
+          const subListing = await listFiles(subPath);
+          const fileCount = subListing.files.length;
+          const dirCount = subListing.directories.length;
           const annotatedCount = Object.values(subCtx).filter(f => f.status === "annotated").length;
           dirEntries.push({
             type: "directory" as const,
             name: dirName,
             path: subPath,
             fileCount,
+            dirCount,
             annotatedCount,
           });
         }
@@ -1065,6 +1162,27 @@ Return ONLY your description, no labels or prefixes.`,
       return new Response(Bun.file(thumbPath), {
         headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=86400" },
       });
+    }
+
+    // API: serve a cropped region as PNG
+    const cropMatch = path.match(/^\/api\/files\/(.+)\/crop$/);
+    if (cropMatch && req.method === "GET") {
+      const relPath = decodeURIComponent(cropMatch[1]);
+      try {
+        const filePath = safePath(relPath);
+        if (!existsSync(filePath)) return json({ error: "Not found" }, 404);
+        const url = new URL(req.url, `http://localhost:${PORT}`);
+        const x = parseFloat(url.searchParams.get("x") || "0");
+        const y = parseFloat(url.searchParams.get("y") || "0");
+        const w = parseFloat(url.searchParams.get("w") || "100");
+        const h = parseFloat(url.searchParams.get("h") || "100");
+        const buf = await cropRegion(filePath, { x, y, w, h });
+        return new Response(buf, {
+          headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=3600" },
+        });
+      } catch (e: any) {
+        return json({ error: e.message }, 500);
+      }
     }
 
     // API: file preview
@@ -1316,6 +1434,330 @@ Return ONLY your description, no labels or prefixes.`,
         return json({ content: result.content, version: result.version, totalVersions: versions.length });
       } catch (e: any) {
         return json({ error: e.message }, 400);
+      }
+    }
+
+    // API: Export annotated regions as cropped images in a zip
+    if (path === "/api/export" && req.method === "POST") {
+      try {
+        const body = await req.json() as any;
+        const scope = body.scope; // "file" | "directory" | "root"
+        const targetPath = body.path || "";
+        const authorFilter = body.authorFilter || "all"; // "all" | "user" | "claude"
+
+        type WorkItem = { relPath: string; comment: any; commentIdx: number };
+        const workItems: WorkItem[] = [];
+
+        if (scope === "file") {
+          if (!targetPath) return json({ error: "path required for file scope" }, 400);
+          const { dir, base } = splitRelPath(targetPath);
+          const context = await readContext(dir);
+          const fileCtx = context[base];
+          if (fileCtx?.comments) {
+            fileCtx.comments.forEach((c: any, i: number) => {
+              if (c.region) workItems.push({ relPath: targetPath, comment: c, commentIdx: i });
+            });
+          }
+        } else if (scope === "directory") {
+          const context = await readContext(targetPath);
+          for (const [filename, fileCtx] of Object.entries(context) as any) {
+            if (!fileCtx.comments) continue;
+            const relPath = targetPath ? `${targetPath}/${filename}` : filename;
+            fileCtx.comments.forEach((c: any, i: number) => {
+              if (c.region) workItems.push({ relPath, comment: c, commentIdx: i });
+            });
+          }
+        } else if (scope === "root") {
+          const allContexts = await collectAllContexts(resolvedFolder, "");
+          for (const { dir, filename, fileCtx } of allContexts) {
+            const relPath = dir ? `${dir}/${filename}` : filename;
+            fileCtx.comments?.forEach((c: any, i: number) => {
+              if (c.region) workItems.push({ relPath, comment: c, commentIdx: i });
+            });
+          }
+        } else {
+          return json({ error: "Invalid scope. Use 'file', 'directory', or 'root'" }, 400);
+        }
+
+        // Apply author filter
+        const filtered = authorFilter === "all"
+          ? workItems
+          : workItems.filter(item => item.comment.author === authorFilter);
+
+        if (filtered.length === 0) {
+          return json({ error: "No annotated regions found in the requested scope." }, 400);
+        }
+
+        const zip = new JSZip();
+        const errors: string[] = [];
+        const jsonlLines: string[] = [];
+        const addedOriginals = new Set<string>();
+        let globalIdx = 0;
+
+        for (const item of filtered) {
+          try {
+            const filePath = safePath(item.relPath);
+            const ext = extname(item.relPath).toLowerCase();
+            if (!IMAGE_EXTENSIONS.has(ext)) continue;
+
+            const metadata = await sharp(filePath).metadata();
+            const imgW = metadata.width!;
+            const imgH = metadata.height!;
+            const r = item.comment.region;
+
+            // Deterministic crop filename
+            const { dir: relDir, base } = splitRelPath(item.relPath);
+            const baseName = base.replace(/\.[^.]+$/, "");
+            const cropName = `${baseName}_c${String(globalIdx).padStart(4, "0")}.png`;
+            const cropPath = relDir ? `crops/${relDir}/${cropName}` : `crops/${cropName}`;
+
+            const croppedBuffer = await cropRegion(filePath, r);
+            zip.file(cropPath, croppedBuffer);
+
+            // Include original image once
+            const origPath = relDir ? `originals/${relDir}/${base}` : `originals/${base}`;
+            if (!addedOriginals.has(item.relPath)) {
+              addedOriginals.add(item.relPath);
+              const origBuffer = await Bun.file(filePath).arrayBuffer();
+              zip.file(origPath, Buffer.from(origBuffer));
+            }
+
+            // Pixel coordinates
+            const pxX = Math.round((r.x / 100) * imgW);
+            const pxY = Math.round((r.y / 100) * imgH);
+            const pxW = Math.min(Math.round((r.w / 100) * imgW), imgW - pxX);
+            const pxH = Math.min(Math.round((r.h / 100) * imgH), imgH - pxY);
+
+            jsonlLines.push(JSON.stringify({
+              image: cropPath,
+              source_image: origPath,
+              source_file: item.relPath,
+              text: item.comment.text,
+              author: item.comment.author,
+              region_pct: { x: r.x, y: r.y, w: r.w, h: r.h },
+              region_px: { x: pxX, y: pxY, w: pxW, h: pxH, img_w: imgW, img_h: imgH },
+            }));
+
+            globalIdx++;
+          } catch (e: any) {
+            errors.push(`${item.relPath} region #${item.commentIdx + 1}: ${e.message}`);
+          }
+        }
+
+        zip.file("annotations.jsonl", jsonlLines.join("\n") + "\n");
+
+        // COCO-format JSON for detection tasks
+        const cocoImages: any[] = [];
+        const cocoAnnotations: any[] = [];
+        const imageIdMap = new Map<string, number>();
+        let annoId = 1;
+
+        for (const line of jsonlLines) {
+          const entry = JSON.parse(line);
+          let imageId = imageIdMap.get(entry.source_image);
+          if (imageId === undefined) {
+            imageId = imageIdMap.size + 1;
+            imageIdMap.set(entry.source_image, imageId);
+            cocoImages.push({
+              id: imageId,
+              file_name: entry.source_image,
+              width: entry.region_px.img_w,
+              height: entry.region_px.img_h,
+            });
+          }
+          cocoAnnotations.push({
+            id: annoId++,
+            image_id: imageId,
+            category_id: 1,
+            bbox: [entry.region_px.x, entry.region_px.y, entry.region_px.w, entry.region_px.h],
+            area: entry.region_px.w * entry.region_px.h,
+            text: entry.text,
+            author: entry.author,
+            iscrowd: 0,
+          });
+        }
+
+        zip.file("coco.json", JSON.stringify({
+          images: cocoImages,
+          annotations: cocoAnnotations,
+          categories: [{ id: 1, name: "annotation", supercategory: "none" }],
+        }, null, 2));
+
+        if (errors.length > 0) {
+          zip.file("_errors.txt", errors.join("\n"));
+        }
+
+        const zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
+        const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+        const filename = `context-export-${scope}-${timestamp}.zip`;
+
+        return new Response(zipBuffer, {
+          headers: {
+            "Content-Type": "application/zip",
+            "Content-Disposition": `attachment; filename="${filename}"`,
+          },
+        });
+      } catch (e: any) {
+        return json({ error: e.message }, 500);
+      }
+    }
+
+    // API: Chat — conversational Q&A about files and annotations
+    if (path === "/api/chat" && req.method === "POST") {
+      try {
+        const settings = await readSettings();
+        if (!settings.apiKey) return json({ error: "No API key configured" }, 400);
+
+        const body = (await req.json()) as any;
+        const userMessage = body.message;
+        const history = body.history || []; // array of { role, content } from prior turns
+        const scope = body.scope || "directory"; // "directory" or "all"
+        const chatDir = body.dir || "";
+
+        if (!userMessage) return json({ error: "message required" }, 400);
+
+        // Gather annotation context
+        let annotationDump = "";
+        const allContexts =
+          scope === "all"
+            ? await collectAllContexts(resolvedFolder, "")
+            : await collectAllContexts(
+                join(resolvedFolder, chatDir),
+                chatDir
+              );
+
+        for (const { dir, filename, fileCtx } of allContexts) {
+          const displayName = dir ? `${dir}/${filename}` : filename;
+          annotationDump += `\n## ${displayName} (status: ${fileCtx.status})\n`;
+          for (let i = 0; i < fileCtx.comments.length; i++) {
+            const c = fileCtx.comments[i];
+            const regionNote = c.region
+              ? ` (region: ${Math.round(c.region.x)}%-${Math.round(c.region.x + c.region.w)}% x, ${Math.round(c.region.y)}%-${Math.round(c.region.y + c.region.h)}% y)`
+              : "";
+            annotationDump += `- [${c.author.toUpperCase()}, #${i}]${regionNote} ${c.text}\n`;
+          }
+        }
+
+        // Gather text documents
+        const textDocs = await collectTextDocuments(
+          join(resolvedFolder, chatDir),
+          chatDir,
+          scope === "all"
+        );
+        let textDocDump = "";
+        for (const doc of textDocs) {
+          textDocDump += `\n--- ${doc.path} ---\n${doc.content}\n`;
+        }
+
+        // Also include file listing (names + status) even if no annotations
+        let fileListing = "";
+        if (scope === "all") {
+          // Just list annotated files from allContexts
+        } else {
+          const context = await readContext(chatDir);
+          const entries = Object.entries(context);
+          if (entries.length > 0) {
+            fileListing = "\n\n## File Status Overview\n";
+            for (const [fn, ctx] of entries) {
+              fileListing += `- ${fn}: ${(ctx as any).status || "pending"} (${(ctx as any).comments?.length || 0} comments)\n`;
+            }
+          }
+        }
+
+        const systemPrompt = `You are an assistant embedded in Context Annotator, a tool for annotating images and files from product/design sessions. You have access to all the annotations and file data for the user's project.
+
+Your job is to answer questions about the annotated files, help identify patterns, suggest next steps, and provide insights. Be specific, reference actual filenames and annotation content. Keep responses concise and useful.
+
+## Reference syntax
+
+When mentioning specific files or comments, use these special link formats so the UI can make them clickable:
+
+- To reference a file/image: [[file:FILENAME]] — e.g. [[file:IMG_5233 2.PNG]] or [[file:subdir/photo.jpg]]
+- To reference a specific comment: [[comment:FILENAME#INDEX]] — e.g. [[comment:IMG_5233 2.PNG#3]] where 3 is the comment index number shown as #N in the data below
+
+Always use these link formats when referring to specific files or comments. Use the exact filenames as they appear in the data below. Do not invent filenames.
+
+## Current annotation data
+${annotationDump || "(No annotations found)"}
+${fileListing}
+${textDocDump ? `\nText documents in scope:\n${textDocDump}` : ""}`;
+
+        // Build messages array with history
+        const messages: any[] = [];
+        // Include up to 20 turns of history
+        const recentHistory = history.slice(-20);
+        for (const turn of recentHistory) {
+          messages.push({ role: turn.role, content: turn.content });
+        }
+        // Build user message content — text + optional image attachments
+        const attachments = body.attachments || []; // [{type:"project",path:"..."} or {type:"upload",data:"base64...",mediaType:"image/png",name:"..."}]
+        const userContent: any[] = [];
+
+        for (const att of attachments) {
+          try {
+            let imageBuffer: Buffer;
+            let mediaType: string;
+            let label: string;
+
+            if (att.type === "project") {
+              // Load from project directory, optionally cropping a region
+              const filePath = safePath(att.path);
+              const ext = extname(att.path).toLowerCase();
+              mediaType = ext === ".png" ? "image/png" : ext === ".gif" ? "image/gif" : ext === ".webp" ? "image/webp" : "image/jpeg";
+              let rawBuffer: Buffer;
+              if (att.region && typeof att.region.x === "number") {
+                // Crop to the specified region first
+                rawBuffer = await cropRegion(filePath, att.region);
+                mediaType = "image/png"; // cropRegion outputs PNG
+              } else {
+                rawBuffer = Buffer.from(await readFile(filePath));
+              }
+              imageBuffer = await resizeForApi(rawBuffer, mediaType);
+              label = att.region ? `${att.path} (crop)` : att.path;
+            } else if (att.type === "upload") {
+              mediaType = att.mediaType || "image/png";
+              imageBuffer = await resizeForApi(Buffer.from(att.data, "base64"), mediaType);
+              label = att.name || "uploaded image";
+            } else continue;
+
+            userContent.push({
+              type: "image",
+              source: { type: "base64", media_type: mediaType, data: imageBuffer.toString("base64") },
+            });
+            userContent.push({ type: "text", text: `[Attached: ${label}]` });
+          } catch (e: any) {
+            userContent.push({ type: "text", text: `[Failed to load attachment: ${e.message}]` });
+          }
+        }
+
+        userContent.push({ type: "text", text: userMessage });
+        messages.push({ role: "user", content: userContent.length === 1 ? userMessage : userContent });
+
+        const res = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": settings.apiKey,
+            "anthropic-version": "2023-06-01",
+          },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 2048,
+            system: systemPrompt,
+            messages,
+          }),
+        });
+
+        if (!res.ok) {
+          const err = await res.text();
+          return json({ error: `Claude API error: ${res.status} ${err}` }, 500);
+        }
+
+        const data = (await res.json()) as any;
+        const reply = data.content[0]?.text ?? "No response";
+        return json({ reply });
+      } catch (e: any) {
+        return json({ error: e.message }, 500);
       }
     }
 

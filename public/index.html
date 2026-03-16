@@ -305,6 +305,7 @@
     pointer-events: none;
     overflow: visible;
   }
+  .region-overlay.draw-mode rect[data-region-idx] { cursor: crosshair !important; }
   .region-rect-drawing {
     fill: none;
     stroke: #00ff66;
@@ -332,6 +333,13 @@
     fill: none;
     stroke: #00ff66;
     stroke-width: 5;
+    opacity: 1;
+  }
+  .region-rect-selected {
+    fill: rgba(255, 68, 68, 0.1);
+    stroke: #ff4444;
+    stroke-width: 4;
+    stroke-dasharray: 8 4;
     opacity: 1;
   }
   .region-rect-dimmed {
@@ -395,6 +403,31 @@
   }
   .btn-claude-region:hover { background: rgba(234, 179, 8, 0.3); }
   .btn-claude-region:disabled { opacity: 0.5; cursor: wait; }
+  .export-dropdown {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 4px;
+    background: #1e1e1e;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 6px;
+    padding: 4px 0;
+    min-width: 160px;
+    z-index: 100;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  }
+  .export-option {
+    display: block;
+    width: 100%;
+    padding: 8px 14px;
+    background: none;
+    border: none;
+    color: var(--text);
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .export-option:hover { background: rgba(255,255,255,0.08); }
   .gallery-preview .file-placeholder {
     text-align: center;
     color: var(--text-muted);
@@ -929,6 +962,54 @@
     text-align: center;
     padding: 40px 20px;
   }
+  .summary-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 48px 24px;
+    gap: 20px;
+  }
+  .summary-loading-spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid rgba(255,255,255,0.08);
+    border-top-color: var(--gold);
+    border-radius: 50%;
+    animation: summary-spin 0.8s linear infinite;
+  }
+  @keyframes summary-spin { to { transform: rotate(360deg); } }
+  .summary-loading-text {
+    font-size: 13px;
+    color: var(--text-muted);
+    text-align: center;
+    line-height: 1.5;
+  }
+  .summary-loading-step {
+    font-size: 12px;
+    color: var(--gold);
+    opacity: 0.8;
+    margin-top: 4px;
+  }
+  .summary-loading-shimmer {
+    width: 100%;
+    max-width: 240px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .shimmer-line {
+    height: 10px;
+    background: linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.08) 50%, rgba(255,255,255,0.04) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s ease-in-out infinite;
+    border-radius: 4px;
+  }
+  .shimmer-line:nth-child(2) { width: 85%; }
+  .shimmer-line:nth-child(3) { width: 70%; }
+  .shimmer-line:nth-child(4) { width: 90%; }
+  @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
   .summary-footer {
     padding: 12px 16px;
     border-top: 1px solid var(--border);
@@ -960,6 +1041,566 @@
     user-select: none;
   }
 
+  /* ── Chat Panel ── */
+  /* ── Chat Right Panel ── */
+  .chat-panel {
+    width: 420px;
+    min-width: 420px;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 56px);
+    position: fixed;
+    top: 56px;
+    right: 0;
+    z-index: 50;
+    transform: translateX(100%);
+    transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    pointer-events: none;
+  }
+  .chat-panel.open {
+    transform: translateX(0);
+    pointer-events: auto;
+  }
+  /* Push content when chat is open */
+  .overview-container,
+  .gallery { transition: margin-right 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+  body.chat-open .overview-container,
+  body.chat-open .gallery { margin-right: 420px; }
+
+  .chat-history-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    background: var(--bg);
+  }
+  .chat-history-btn {
+    padding: 4px 10px;
+    font-size: 11px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text-muted);
+    cursor: pointer;
+    font-family: inherit;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 140px;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .chat-history-btn:hover { background: var(--surface-2); color: var(--text); }
+  .chat-history-btn.active {
+    background: rgba(59,130,246,0.12);
+    border-color: rgba(59,130,246,0.3);
+    color: var(--accent);
+  }
+  .chat-new-btn {
+    padding: 4px 10px;
+    font-size: 11px;
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-family: inherit;
+    white-space: nowrap;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    flex-shrink: 0;
+  }
+  .chat-new-btn:hover { background: rgba(59,130,246,0.08); color: var(--accent); border-color: rgba(59,130,246,0.3); }
+  .chat-delete-chat {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 13px;
+    padding: 2px 4px;
+    border-radius: 4px;
+    opacity: 0;
+    transition: opacity 0.1s, color 0.1s;
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+  .chat-history-bar:hover .chat-delete-chat { opacity: 1; }
+  .chat-delete-chat:hover { color: var(--red); }
+
+  .chat-header {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+    background: linear-gradient(180deg, rgba(59,130,246,0.06) 0%, transparent 100%);
+  }
+  .chat-header-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .chat-header-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .chat-header-title {
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .chat-scope-toggle {
+    display: flex;
+    gap: 2px;
+    background: var(--bg);
+    border-radius: 6px;
+    padding: 2px;
+  }
+  .chat-scope-btn {
+    padding: 3px 10px;
+    font-size: 11px;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.15s, color 0.15s;
+  }
+  .chat-scope-btn.active {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+  .chat-scope-btn:hover:not(.active) { color: var(--text); }
+
+  .chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    scroll-behavior: smooth;
+  }
+
+  .chat-empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 32px;
+    text-align: center;
+  }
+  .chat-empty-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, rgba(59,130,246,0.12), rgba(139,92,246,0.12));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: chatEmptyFloat 3s ease-in-out infinite;
+  }
+  @keyframes chatEmptyFloat {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-4px); }
+  }
+  .chat-empty-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .chat-empty-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.5;
+  }
+  .chat-suggestions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+    margin-top: 4px;
+  }
+  .chat-suggestion {
+    padding: 8px 12px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text-muted);
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.15s, color 0.15s, border-color 0.15s, transform 0.1s;
+  }
+  .chat-suggestion:hover {
+    background: rgba(59,130,246,0.08);
+    border-color: rgba(59,130,246,0.3);
+    color: var(--text);
+    transform: translateX(2px);
+  }
+
+  .chat-msg {
+    max-width: 88%;
+    padding: 10px 14px;
+    border-radius: 14px;
+    font-size: 13px;
+    line-height: 1.55;
+    animation: chatMsgIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  @keyframes chatMsgIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .chat-msg.user {
+    align-self: flex-end;
+    background: linear-gradient(135deg, #3b82f6, #2563eb);
+    color: white;
+    border-bottom-right-radius: 4px;
+  }
+  .chat-msg.assistant {
+    align-self: flex-start;
+    background: var(--surface-2);
+    color: var(--text);
+    border-bottom-left-radius: 4px;
+  }
+  .chat-msg.assistant .chat-msg-rendered {
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  .chat-msg.assistant .chat-msg-rendered p { margin: 0 0 6px 0; }
+  .chat-msg.assistant .chat-msg-rendered p:last-child { margin: 0; }
+  .chat-msg.assistant .chat-msg-rendered ul,
+  .chat-msg.assistant .chat-msg-rendered ol { margin: 0 0 6px 0; padding-left: 18px; }
+  .chat-msg.assistant .chat-msg-rendered li { margin-bottom: 2px; }
+  .chat-msg.assistant .chat-msg-rendered code {
+    background: rgba(255,255,255,0.06);
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 12px;
+  }
+  .chat-msg.assistant .chat-msg-rendered strong { color: var(--accent); font-weight: 600; }
+  .chat-msg-actions {
+    display: flex;
+    gap: 4px;
+    margin-top: 6px;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .chat-msg:hover .chat-msg-actions { opacity: 1; }
+  .chat-copy-btn {
+    background: rgba(255,255,255,0.08);
+    border: none;
+    color: var(--text-muted);
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    transition: background 0.15s, color 0.15s;
+  }
+  .chat-copy-btn:hover { background: rgba(255,255,255,0.14); color: var(--text); }
+  .chat-copy-btn.copied { color: var(--green); }
+  .chat-copy-all {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s;
+    position: relative;
+  }
+  .chat-copy-all:hover { background: rgba(255,255,255,0.08); color: var(--text); }
+  .chat-copy-all-tooltip {
+    position: absolute;
+    bottom: -26px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--green);
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .chat-copy-all-tooltip.show { opacity: 1; }
+  .chat-ref {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 7px 1px 5px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    text-decoration: none;
+    transition: background 0.15s, color 0.15s;
+    vertical-align: baseline;
+  }
+  .chat-ref-file {
+    background: rgba(59, 130, 246, 0.12);
+    color: #60a5fa;
+    border: 1px solid rgba(59, 130, 246, 0.2);
+  }
+  .chat-ref-file:hover { background: rgba(59, 130, 246, 0.22); color: #93bbfd; }
+  .chat-ref-comment {
+    background: rgba(168, 85, 247, 0.12);
+    color: #c084fc;
+    border: 1px solid rgba(168, 85, 247, 0.2);
+  }
+  .chat-ref-comment:hover { background: rgba(168, 85, 247, 0.22); color: #d8b4fe; }
+  .chat-msg-error {
+    background: rgba(239, 68, 68, 0.15) !important;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: #fca5a5 !important;
+    font-size: 12px;
+  }
+
+  .chat-typing {
+    align-self: flex-start;
+    padding: 12px 16px;
+    background: var(--surface-2);
+    border-radius: 14px;
+    border-bottom-left-radius: 4px;
+    display: flex;
+    gap: 5px;
+    align-items: center;
+    animation: chatMsgIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  .chat-typing-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    animation: chatTypingBounce 1.2s ease-in-out infinite;
+  }
+  .chat-typing-dot:nth-child(2) { animation-delay: 0.15s; }
+  .chat-typing-dot:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes chatTypingBounce {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+    30% { transform: translateY(-6px); opacity: 1; }
+  }
+
+  .chat-input-area {
+    padding: 12px;
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .chat-input-row {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+  }
+  .chat-input {
+    flex: 1;
+    padding: 9px 14px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    color: var(--text);
+    font-size: 13px;
+    font-family: inherit;
+    line-height: 20px;
+    resize: none;
+    outline: none;
+    box-sizing: border-box;
+    overflow: hidden;
+    field-sizing: content;
+    max-height: 120px;
+    transition: border-color 0.15s;
+  }
+  .chat-input:focus { border-color: var(--accent); }
+  .chat-input::placeholder { color: var(--text-muted); }
+  .chat-send-btn {
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    border: none;
+    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+    color: white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: transform 0.15s, opacity 0.15s;
+  }
+  .chat-send-btn:hover { transform: scale(1.05); }
+  .chat-send-btn:active { transform: scale(0.95); }
+  .chat-send-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+  .chat-attach-btn {
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    position: relative;
+  }
+  .chat-attach-btn:hover { background: var(--surface-2); color: var(--text); border-color: rgba(255,255,255,0.15); }
+  .chat-attach-menu {
+    position: absolute;
+    bottom: 42px;
+    left: 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 4px 0;
+    min-width: 180px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    z-index: 10;
+    display: none;
+  }
+  .chat-attach-menu.open { display: block; }
+  .chat-attach-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 14px;
+    background: none;
+    border: none;
+    color: var(--text);
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    text-align: left;
+  }
+  .chat-attach-option:hover { background: rgba(255,255,255,0.06); }
+  .chat-attach-option svg { flex-shrink: 0; color: var(--text-muted); }
+  .chat-attachments {
+    display: flex;
+    gap: 6px;
+    padding: 0 12px 8px;
+    flex-wrap: wrap;
+  }
+  .chat-attachment-thumb {
+    position: relative;
+    width: 56px;
+    height: 56px;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .chat-attachment-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .chat-attachment-thumb .remove-attachment {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.7);
+    border: none;
+    color: white;
+    font-size: 10px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.1s;
+  }
+  .chat-attachment-thumb:hover .remove-attachment { opacity: 1; }
+  .chat-attachment-label {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: rgba(0,0,0,0.7);
+    color: white;
+    font-size: 8px;
+    padding: 1px 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Context menu for "Send to Chat" */
+  .ctx-menu {
+    position: fixed;
+    z-index: 300;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 4px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    min-width: 160px;
+  }
+  .ctx-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    font-size: 12px;
+    color: var(--text);
+    border: none;
+    background: none;
+    width: 100%;
+    cursor: pointer;
+    border-radius: 5px;
+    white-space: nowrap;
+  }
+  .ctx-menu-item:hover { background: rgba(255,255,255,0.06); }
+  .ctx-menu-item svg { color: var(--text-muted); flex-shrink: 0; }
+
+  /* Drag-to-chat drop zone */
+  .chat-panel.drop-hover::before {
+    content: 'Drop to attach';
+    position: absolute;
+    inset: 0;
+    background: rgba(59,130,246,0.12);
+    border: 2px dashed rgba(59,130,246,0.5);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--accent);
+    z-index: 60;
+    pointer-events: none;
+  }
+
+  /* Draggable grid items */
+  .grid-item[draggable="true"] { cursor: grab; }
+  .grid-item[draggable="true"]:active { cursor: grabbing; }
+
 </style>
 <script src="https://cdn.jsdelivr.net/npm/marked@14/marked.min.js"></script>
 </head>
@@ -974,9 +1615,18 @@
   <div class="topbar-right">
     <span class="progress-text" id="progress-text"></span>
     <button class="btn btn-ghost" id="btn-toggle-summary">Summary</button>
+    <div class="export-wrapper" style="position:relative;display:inline-block">
+      <button class="btn btn-ghost" id="btn-export">Export</button>
+      <div class="export-dropdown" id="export-dropdown" style="display:none">
+        <button class="export-option" id="export-file" style="display:none">This Image</button>
+        <button class="export-option" id="export-dir">This Directory</button>
+        <button class="export-option" id="export-root">Everything</button>
+      </div>
+    </div>
     <button class="btn btn-primary" id="btn-add-context">Add Context</button>
     <button class="btn btn-ghost" id="btn-back" style="display:none">Back to Grid</button>
     <button class="btn btn-ghost" id="btn-settings" title="API Key"><svg width="18" height="18" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M27.0713 4.92874C25.4829 3.33812 23.4049 2.32908 21.1726 2.06443C18.9403 1.79979 16.684 2.29497 14.7677 3.47009C12.8514 4.6452 11.3869 6.43169 10.6106 8.54129C9.83424 10.6509 9.79133 12.9605 10.4888 15.0975L3.58626 22C3.39973 22.185 3.25185 22.4053 3.15121 22.648C3.05057 22.8907 2.99917 23.151 3.00001 23.4137V27C3.00001 27.5304 3.21072 28.0391 3.5858 28.4142C3.96087 28.7893 4.46958 29 5.00001 29H9.00001C9.26523 29 9.51958 28.8946 9.70712 28.7071C9.89465 28.5196 10 28.2652 10 28V26H12C12.2652 26 12.5196 25.8946 12.7071 25.7071C12.8947 25.5196 13 25.2652 13 25V23H15C15.1314 23.0001 15.2615 22.9743 15.3829 22.9241C15.5043 22.8739 15.6146 22.8003 15.7075 22.7075L16.9025 21.5112C17.9028 21.8366 18.9482 22.0015 20 22H20.0125C21.9893 21.9976 23.9211 21.4094 25.5637 20.3096C27.2063 19.2098 28.4862 17.6479 29.2415 15.8211C29.9969 13.9943 30.1939 11.9846 29.8076 10.0459C29.4213 8.10723 28.4691 6.32651 27.0713 4.92874ZM28 12.2625C27.8638 16.5237 24.2813 19.995 20.0138 20H20C18.9877 20.0017 17.9844 19.8104 17.0438 19.4362C16.8598 19.3564 16.656 19.3337 16.4589 19.3712C16.2619 19.4086 16.0806 19.5044 15.9388 19.6462L14.5863 21H12C11.7348 21 11.4804 21.1053 11.2929 21.2929C11.1054 21.4804 11 21.7348 11 22V24H9.00001C8.73479 24 8.48044 24.1053 8.2929 24.2929C8.10537 24.4804 8.00001 24.7348 8.00001 25V27H5.00001V23.4137L12.3538 16.0612C12.4955 15.9194 12.5914 15.7381 12.6288 15.5411C12.6663 15.344 12.6436 15.1402 12.5638 14.9562C12.1884 14.0125 11.9971 13.0056 12 11.99C12 7.72249 15.4763 4.13999 19.7375 4.00374C20.8321 3.96721 21.9225 4.15582 22.9413 4.55788C23.96 4.95995 24.8853 5.5669 25.6599 6.34115C26.4345 7.1154 27.0419 8.04044 27.4444 9.05899C27.8469 10.0775 28.036 11.1679 28 12.2625ZM24 9.49999C24 9.79666 23.912 10.0867 23.7472 10.3333C23.5824 10.58 23.3481 10.7723 23.074 10.8858C22.7999 10.9993 22.4983 11.029 22.2074 10.9712C21.9164 10.9133 21.6491 10.7704 21.4394 10.5606C21.2296 10.3509 21.0867 10.0836 21.0288 9.79262C20.971 9.50165 21.0007 9.20005 21.1142 8.92596C21.2277 8.65187 21.42 8.41761 21.6667 8.25278C21.9133 8.08796 22.2033 7.99999 22.5 7.99999C22.8978 7.99999 23.2794 8.15802 23.5607 8.43933C23.842 8.72063 24 9.10216 24 9.49999Z" fill="currentColor"/></svg></button>
+    <button class="btn btn-ghost" id="btn-chat" title="Chat with Claude"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 2L14.09 8.26L20 9.27L15.55 13.97L16.91 20L12 16.9L7.09 20L8.45 13.97L4 9.27L9.91 8.26L12 2Z" fill="currentColor"/></svg></button>
   </div>
 </div>
 
@@ -1081,6 +1731,71 @@
   </div>
 </div>
 
+<!-- Chat Right Panel -->
+<div class="chat-panel" id="chat-panel">
+  <div class="chat-header">
+    <div class="chat-header-left">
+      <div class="chat-header-icon">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2L14.09 8.26L20 9.27L15.55 13.97L16.91 20L12 16.9L7.09 20L8.45 13.97L4 9.27L9.91 8.26L12 2Z" fill="white"/></svg>
+      </div>
+      <span class="chat-header-title">Chat</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <button class="chat-copy-all" id="chat-copy-all" title="Copy entire conversation">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        <span class="chat-copy-all-tooltip" id="chat-copy-all-tooltip">Copied!</span>
+      </button>
+      <div class="chat-scope-toggle">
+        <button class="chat-scope-btn active" data-scope="directory">This Folder</button>
+        <button class="chat-scope-btn" data-scope="all">All Folders</button>
+      </div>
+    </div>
+  </div>
+  <div class="chat-history-bar" id="chat-history-bar">
+    <button class="chat-new-btn" id="chat-new-btn" title="New chat">+ New</button>
+  </div>
+  <div class="chat-messages" id="chat-messages">
+    <div class="chat-empty" id="chat-empty">
+      <div class="chat-empty-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 2L14.09 8.26L20 9.27L15.55 13.97L16.91 20L12 16.9L7.09 20L8.45 13.97L4 9.27L9.91 8.26L12 2Z" fill="url(#chatGrad)"/><defs><linearGradient id="chatGrad" x1="4" y1="2" x2="20" y2="20" gradientUnits="userSpaceOnUse"><stop stop-color="#3b82f6"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient></defs></svg>
+      </div>
+      <div class="chat-empty-title">Ask about your files</div>
+      <div class="chat-empty-desc">Chat with Claude about your annotations, patterns, and design decisions.</div>
+      <div class="chat-suggestions" id="chat-suggestions">
+        <button class="chat-suggestion">What patterns do you see across annotations?</button>
+        <button class="chat-suggestion">Which files still need annotation?</button>
+        <button class="chat-suggestion">Summarize the key decisions made so far</button>
+        <button class="chat-suggestion">What components have been identified?</button>
+      </div>
+    </div>
+  </div>
+  <div class="chat-attachments" id="chat-attachments" style="display:none"></div>
+  <div class="chat-input-area">
+    <div class="chat-input-row">
+      <div style="position:relative">
+        <button class="chat-attach-btn" id="chat-attach-btn" title="Attach files">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+        </button>
+        <div class="chat-attach-menu" id="chat-attach-menu">
+          <button class="chat-attach-option" id="chat-attach-project">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
+            From project files
+          </button>
+          <button class="chat-attach-option" id="chat-attach-upload">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            Upload from device
+          </button>
+        </div>
+      </div>
+      <textarea class="chat-input" id="chat-input" placeholder="Ask about your files..." rows="1"></textarea>
+      <button class="chat-send-btn" id="chat-send" title="Send">
+        <svg width="16" height="16" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M28.98 14.25L7.98 2.26C7.63 2.06 7.22 1.98 6.82 2.02C6.41 2.05 6.03 2.21 5.72 2.47C5.41 2.73 5.18 3.08 5.07 3.48C4.97 3.87 4.98 4.28 5.12 4.67L8.94 16L5.12 27.33C5.01 27.64 4.98 27.96 5.02 28.27C5.06 28.59 5.18 28.89 5.37 29.15C5.55 29.42 5.8 29.63 6.08 29.78C6.37 29.92 6.68 30 7 30C7.35 30 7.69 29.91 7.99 29.74L28.98 17.73C29.29 17.56 29.55 17.31 29.73 17C29.91 16.69 30 16.34 30 15.99C30 15.64 29.91 15.29 29.73 14.98C29.55 14.67 29.3 14.42 28.99 14.25L28.98 14.25ZM7 28L10.72 17H18C18.27 17 18.52 16.89 18.71 16.71C18.89 16.52 19 16.27 19 16C19 15.73 18.89 15.48 18.71 15.29C18.52 15.11 18.27 15 18 15H10.72L7.01 4.02L28 15.98L7 28Z" fill="currentColor"/></svg>
+      </button>
+    </div>
+  </div>
+  <input type="file" id="chat-file-upload" accept="image/*" multiple style="display:none">
+</div>
+
 <!-- Settings Modal -->
 <div class="modal-overlay" id="settings-modal">
   <div class="modal">
@@ -1147,6 +1862,7 @@ function navigateToDir(dir) {
   summaryCurrentVersion = null;
   summaryTotalVersions = 0;
   if (summaryVisible) {
+    renderSummary(); // immediately show empty state for the new dir
     loadSummary();
     loadVersionList();
   }
@@ -1253,7 +1969,7 @@ function renderGrid() {
       <div class="grid-thumb-placeholder">\u{1F4C1}</div>
       <div class="grid-info">
         <div class="grid-name">${escapeHtml(d.name)}</div>
-        <div class="grid-meta">${d.fileCount} file${d.fileCount !== 1 ? 's' : ''}${d.annotatedCount ? ` \u00B7 ${d.annotatedCount} annotated` : ''}</div>
+        <div class="grid-meta">${d.fileCount} file${d.fileCount !== 1 ? 's' : ''}${d.dirCount ? ` \u00B7 ${d.dirCount} folder${d.dirCount !== 1 ? 's' : ''}` : ''}${d.annotatedCount ? ` \u00B7 ${d.annotatedCount} annotated` : ''}</div>
       </div>
     </div>
   `).join('');
@@ -1297,6 +2013,7 @@ function enterGallery(onRendered) {
   document.getElementById('btn-add-context').style.display = 'none';
   document.getElementById('btn-toggle-summary').style.display = 'none';
   document.getElementById('btn-back').style.display = '';
+  updateChatFabVisibility();
   renderGalleryItem().then(() => {
     if (onRendered) onRendered();
   });
@@ -1310,10 +2027,12 @@ function exitGallery() {
   document.getElementById('btn-add-context').style.display = '';
   document.getElementById('btn-toggle-summary').style.display = '';
   document.getElementById('btn-back').style.display = 'none';
+  updateChatFabVisibility();
   loadFiles();
 }
 
 async function renderGalleryItem() {
+  selectedRegionIndex = null;
   const fileItems = onlyFiles();
   if (!fileItems[currentIndex]) return;
   const file = fileItems[currentIndex];
@@ -1350,6 +2069,18 @@ async function renderGalleryItem() {
 
   // Clear input
   document.getElementById('comment-input').value = '';
+}
+
+// Light refresh: only update sidebar comments + region overlay without rebuilding the image
+function refreshSidebar() {
+  const fileItems = onlyFiles();
+  if (!fileItems[currentIndex]) return;
+  const file = fileItems[currentIndex];
+  document.getElementById('sidebar-filename').textContent = file.name;
+  document.getElementById('sidebar-position').textContent = `${currentIndex + 1} of ${fileItems.length}`;
+  document.getElementById('sidebar-progress-fill').style.width = `${((currentIndex + 1) / fileItems.length) * 100}%`;
+  renderComments(file.path, file);
+  renderRegionOverlay();
 }
 
 // filename param is now a relative path (file.path)
@@ -1525,6 +2256,39 @@ function renderComments(filename, fileCtx) {
       renderRegionOverlay();
     });
   });
+
+  // Right-click "Send to Chat" on comments with regions
+  list.querySelectorAll('.comment[data-region]').forEach(el => {
+    el.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const idx = parseInt(el.id.split('-').pop(), 10);
+      const comment = fileCtx.comments[idx];
+      if (!comment || !comment.region) return;
+      showContextMenu(e.clientX, e.clientY, [
+        { label: 'Send crop to Chat', icon: 'sparkle', action: () => {
+          addProjectAttachment(filename, comment.region, `#${idx+1} crop`);
+          if (!chatOpen) toggleChat();
+        }},
+        { label: 'Send full image to Chat', icon: 'image', action: () => {
+          addProjectAttachment(filename, null, filename.split('/').pop());
+          if (!chatOpen) toggleChat();
+        }},
+      ]);
+    });
+  });
+
+  // Right-click "Send to Chat" on comments without regions (send full image)
+  list.querySelectorAll('.comment:not([data-region])').forEach(el => {
+    el.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      showContextMenu(e.clientX, e.clientY, [
+        { label: 'Send image to Chat', icon: 'image', action: () => {
+          addProjectAttachment(filename, null, filename.split('/').pop());
+          if (!chatOpen) toggleChat();
+        }},
+      ]);
+    });
+  });
 }
 
 function escapeHtml(str) {
@@ -1557,7 +2321,7 @@ async function addComment() {
   updateStagedRegionUI();
   renderRegionOverlay();
   await reloadCurrentDir();
-  renderGalleryItem();
+  refreshSidebar();
 }
 
 async function deleteComment(filename, index) {
@@ -1565,7 +2329,7 @@ async function deleteComment(filename, index) {
     method: 'DELETE',
   });
   await reloadCurrentDir();
-  renderGalleryItem();
+  refreshSidebar();
 }
 
 async function skipFile() {
@@ -1603,11 +2367,24 @@ function startAddContext() {
 
 // ── Summary Reference Navigation ──
 // filePath can be a relative path like "subdir/IMG_5210.jpeg" or just "IMG_5210.jpeg"
-function navigateToComment(filePath, commentIndex) {
+async function navigateToComment(filePath, commentIndex) {
+  // If file is in a different directory, navigate there first
+  const parts = filePath.split('/');
+  const fileDir = parts.length > 1 ? parts.slice(0, -1).join('/') : '';
+  if (fileDir !== currentDir) {
+    navigateToDir(fileDir);
+    // Wait for files to load
+    await new Promise(r => setTimeout(r, 300));
+  }
+
   const fileItems = onlyFiles();
-  // Try matching by path first, then by name (for backward compat with old summaries)
   let fileIdx = fileItems.findIndex(f => f.path === filePath);
   if (fileIdx === -1) fileIdx = fileItems.findIndex(f => f.name === filePath);
+  // Also try matching just the basename (for summaries that use bare filenames)
+  if (fileIdx === -1) {
+    const baseName = parts[parts.length - 1];
+    fileIdx = fileItems.findIndex(f => f.name === baseName);
+  }
   if (fileIdx === -1) {
     showRefError('File not found: ' + filePath);
     return;
@@ -1628,10 +2405,22 @@ function navigateToComment(filePath, commentIndex) {
   });
 }
 
-function navigateToImage(filePath) {
+async function navigateToImage(filePath) {
+  // If file is in a different directory, navigate there first
+  const parts = filePath.split('/');
+  const fileDir = parts.length > 1 ? parts.slice(0, -1).join('/') : '';
+  if (fileDir !== currentDir) {
+    navigateToDir(fileDir);
+    await new Promise(r => setTimeout(r, 300));
+  }
+
   const fileItems = onlyFiles();
   let fileIdx = fileItems.findIndex(f => f.path === filePath);
   if (fileIdx === -1) fileIdx = fileItems.findIndex(f => f.name === filePath);
+  if (fileIdx === -1) {
+    const baseName = parts[parts.length - 1];
+    fileIdx = fileItems.findIndex(f => f.name === baseName);
+  }
   if (fileIdx === -1) {
     showRefError('File not found: ' + filePath);
     return;
@@ -1684,6 +2473,7 @@ let editingRegionIndex = null;
 let editDragType = null;
 let editStartMouse = null;
 let editStartRegion = null;
+let selectedRegionIndex = null;
 
 function initZoom() {
   const img = document.getElementById('zoom-img');
@@ -1826,9 +2616,12 @@ function onZoomDblClick(e) {
 }
 
 function onPanStart(e) {
+  // Hold Cmd/Ctrl (or Alt) to draw through existing regions
+  const forceDrawMode = e.metaKey || e.ctrlKey || e.altKey;
+
   // Check if click is on an SVG region element
   const target = e.target;
-  if (target.dataset && target.dataset.regionIdx !== undefined) {
+  if (!forceDrawMode && target.dataset && target.dataset.regionIdx !== undefined) {
     const idx = parseInt(target.dataset.regionIdx, 10);
     e.preventDefault();
     editingRegionIndex = idx;
@@ -1862,8 +2655,9 @@ function onPanStart(e) {
   }
 
   // Click was outside all regions — deselect and draw
-  if (editingRegionIndex !== null) {
+  if (editingRegionIndex !== null || selectedRegionIndex !== null) {
     editingRegionIndex = null;
+    selectedRegionIndex = null;
     renderRegionOverlay();
   }
   onDrawStart(e);
@@ -1915,12 +2709,32 @@ function onEditStart(e, idx, type) {
     renderRegionOverlay();
   };
 
+  let didDrag = false;
+  const origOnMove = onMove;
+  const trackingOnMove = (ev) => {
+    const cur = viewportToImgPct(ev.clientX, ev.clientY);
+    const dx = Math.abs(cur.x - editStartMouse.x);
+    const dy = Math.abs(cur.y - editStartMouse.y);
+    if (dx > 0.5 || dy > 0.5) didDrag = true;
+    origOnMove(ev);
+  };
+
   const onUp = async () => {
-    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mousemove', trackingOnMove);
     document.removeEventListener('mouseup', onUp);
     editDragType = null;
+    const savedStart = editStartMouse;
     editStartMouse = null;
     editStartRegion = null;
+
+    if (!didDrag) {
+      // Click without drag → select/deselect this region
+      selectedRegionIndex = (selectedRegionIndex === idx) ? null : idx;
+      renderRegionOverlay();
+      return;
+    }
+
+    selectedRegionIndex = null;
     // Save to server
     const file = onlyFiles()[currentIndex];
     const comment = file.comments[idx];
@@ -1934,7 +2748,7 @@ function onEditStart(e, idx, type) {
     }
   };
 
-  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mousemove', trackingOnMove);
   document.addEventListener('mouseup', onUp);
   renderRegionOverlay();
 }
@@ -1966,6 +2780,7 @@ function viewportToImgPct(clientX, clientY) {
 
 function onDrawStart(e) {
   e.preventDefault();
+  const altHeldOnStart = e.altKey;
   const start = viewportToImgPct(e.clientX, e.clientY);
   drawStartImgX = start.x;
   drawStartImgY = start.y;
@@ -1982,17 +2797,23 @@ function onDrawStart(e) {
     renderRegionOverlay();
   };
 
-  const onUp = () => {
+  const onUp = (ev) => {
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
+    const altHeld = altHeldOnStart || ev.altKey;
 
-    // Only stage if region is big enough (>2% in both dims)
-    if (drawingRegion && drawingRegion.w > 2 && drawingRegion.h > 2) {
+    // Only stage if region is big enough (>0.5% in both dims — roughly a click vs a drag)
+    if (drawingRegion && drawingRegion.w > 0.5 && drawingRegion.h > 0.5) {
       stagedRegion = { ...drawingRegion };
       drawingRegion = null;
       renderRegionOverlay();
       updateStagedRegionUI();
-      document.getElementById('comment-input').focus();
+      if (altHeld) {
+        // Alt held → immediately ask Claude to describe this region
+        describeRegionWithClaude();
+      } else {
+        document.getElementById('comment-input').focus();
+      }
     } else {
       drawingRegion = null;
       renderRegionOverlay();
@@ -2041,23 +2862,25 @@ function renderRegionOverlay() {
       const w = (r.w / 100) * zoomNatW;
       const h = (r.h / 100) * zoomNatH;
 
-      // Determine class based on focus state
+      // Determine class based on focus/selection state
       let cls = 'region-rect-persistent';
-      if (focusedCommentIndex === i) cls = 'region-rect-focused';
+      const isSelected = selectedRegionIndex === i;
+      if (isSelected) cls = 'region-rect-selected';
+      else if (focusedCommentIndex === i) cls = 'region-rect-focused';
       else if (focusedCommentIndex !== null) cls = 'region-rect-dimmed';
 
       // Body rect — pointer-events for hover + drag-to-move/resize
-      // Cursor is set to 'move' by default; dynamic cursor update on mousemove handles edge cursors
       rects += `<rect x="${x}" y="${y}" width="${w}" height="${h}" class="${cls}" data-region-idx="${i}" style="pointer-events:all;cursor:move"/>`;
 
       // Label
       const fontSize = Math.max(12, Math.round(zoomNatW / 150));
-      const labelText = `#${i + 1}`;
+      const labelText = isSelected ? `#${i + 1} ⌫` : `#${i + 1}`;
       const labelW = fontSize * labelText.length * 0.65 + 8;
       const labelH = fontSize + 6;
-      const labelOpacity = cls === 'region-rect-dimmed' ? 0.15 : (cls === 'region-rect-focused' ? 1 : 0.7);
-      rects += `<rect x="${x}" y="${y - labelH}" width="${labelW}" height="${labelH}" fill="#00ff66" rx="2" style="pointer-events:none;opacity:${labelOpacity}"/>`;
-      rects += `<text x="${x + 4}" y="${y - 4}" fill="black" font-size="${fontSize}" font-weight="bold" font-family="-apple-system,sans-serif" style="pointer-events:none;opacity:${labelOpacity}">${labelText}</text>`;
+      const labelFill = isSelected ? '#ff4444' : '#00ff66';
+      const labelOpacity = cls === 'region-rect-dimmed' ? 0.15 : (cls === 'region-rect-focused' || isSelected ? 1 : 0.7);
+      rects += `<rect x="${x}" y="${y - labelH}" width="${labelW}" height="${labelH}" fill="${labelFill}" rx="2" style="pointer-events:none;opacity:${labelOpacity}"/>`;
+      rects += `<text x="${x + 4}" y="${y - 4}" fill="${isSelected ? 'white' : 'black'}" font-size="${fontSize}" font-weight="bold" font-family="-apple-system,sans-serif" style="pointer-events:none;opacity:${labelOpacity}">${labelText}</text>`;
     });
   }
 
@@ -2102,6 +2925,26 @@ function renderRegionOverlay() {
         else if (nearL || nearR) cursor = 'ew-resize';
         el.style.cursor = cursor;
       });
+      // Right-click "Send to Chat" on region rects
+      el.addEventListener('contextmenu', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const idx = parseInt(el.dataset.regionIdx, 10);
+        const file = onlyFiles()[currentIndex];
+        if (!file) return;
+        const comment = (file.comments || [])[idx];
+        if (!comment || !comment.region) return;
+        showContextMenu(ev.clientX, ev.clientY, [
+          { label: 'Send crop to Chat', icon: 'sparkle', action: () => {
+            addProjectAttachment(file.path, comment.region, `#${idx+1} crop`);
+            if (!chatOpen) toggleChat();
+          }},
+          { label: 'Send full image to Chat', icon: 'image', action: () => {
+            addProjectAttachment(file.path, null, file.name);
+            if (!chatOpen) toggleChat();
+          }},
+        ]);
+      });
     });
   }
 }
@@ -2125,6 +2968,7 @@ function highlightSidebarComment(idx) {
 
 function updateStagedRegionUI() {
   let el = document.getElementById('staged-region-bar');
+  const commentInput = document.getElementById('comment-input');
   if (stagedRegion) {
     if (!el) {
       el = document.createElement('div');
@@ -2136,12 +2980,70 @@ function updateStagedRegionUI() {
       const inputArea = document.querySelector('.sidebar-input');
       inputArea.insertBefore(el, inputArea.firstChild);
     }
+    commentInput.placeholder = 'Enter → Ask Claude · or type your own comment';
   } else {
     if (el) el.remove();
+    commentInput.placeholder = 'Add your context...';
   }
 }
 
-async function describeRegionWithClaude() {
+// Queue for describe-region requests to avoid read-modify-write races on .context.json
+const describeQueue = [];
+let describeProcessing = false;
+let describePendingCount = 0;
+
+function updateDescribeStatus() {
+  const bar = document.getElementById('describe-queue-bar');
+  if (describePendingCount > 0) {
+    if (!bar) {
+      const el = document.createElement('div');
+      el.id = 'describe-queue-bar';
+      el.className = 'region-clear';
+      el.style.background = 'rgba(234,179,8,0.12)';
+      el.style.borderColor = 'var(--gold)';
+      el.style.color = 'var(--gold)';
+      const inputArea = document.querySelector('.sidebar-input');
+      inputArea.insertBefore(el, inputArea.firstChild);
+    }
+    const el = document.getElementById('describe-queue-bar');
+    el.textContent = describePendingCount === 1
+      ? 'Claude is thinking...'
+      : `Claude is thinking... (${describePendingCount} regions queued)`;
+  } else if (bar) {
+    bar.remove();
+  }
+}
+
+async function processDescribeQueue() {
+  if (describeProcessing) return;
+  describeProcessing = true;
+
+  while (describeQueue.length > 0) {
+    const { filePath, region } = describeQueue.shift();
+    try {
+      const res = await api(`/api/files/${encodeURIComponent(filePath)}/describe-region`, {
+        method: 'POST',
+        body: { region },
+      });
+      if (res.error) {
+        console.error('Describe region error:', res.error);
+        alert('Claude annotation failed: ' + res.error);
+      }
+    } catch (e) {
+      console.error('Describe region failed:', e.message);
+      alert('Claude annotation failed: ' + e.message);
+    }
+    describePendingCount--;
+    updateDescribeStatus();
+    // Refresh after each one so the user sees results appearing
+    await reloadCurrentDir();
+    refreshSidebar();
+  }
+
+  describeProcessing = false;
+}
+
+function describeRegionWithClaude() {
   if (!stagedRegion) return;
   if (!hasApiKey) {
     document.getElementById('btn-settings').click();
@@ -2150,32 +3052,17 @@ async function describeRegionWithClaude() {
   const file = onlyFiles()[currentIndex];
   if (!file) return;
 
-  const btn = document.getElementById('btn-claude-region');
-  btn.disabled = true;
-  btn.textContent = 'Thinking...';
+  // Capture region and clear immediately so user can draw the next one
+  const region = { ...stagedRegion };
+  stagedRegion = null;
+  updateStagedRegionUI();
+  renderRegionOverlay();
 
-  try {
-    const res = await api(`/api/files/${encodeURIComponent(file.path)}/describe-region`, {
-      method: 'POST',
-      body: { region: stagedRegion },
-    });
-    if (res.error) {
-      alert('Error: ' + res.error);
-      return;
-    }
-    stagedRegion = null;
-    updateStagedRegionUI();
-    renderRegionOverlay();
-    await reloadCurrentDir();
-    renderGalleryItem();
-  } catch (e) {
-    alert('Failed: ' + e.message);
-  } finally {
-    if (document.getElementById('btn-claude-region')) {
-      btn.disabled = false;
-      btn.textContent = 'Ask Claude';
-    }
-  }
+  // Enqueue
+  describeQueue.push({ filePath: file.path, region });
+  describePendingCount++;
+  updateDescribeStatus();
+  processDescribeQueue();
 }
 
 function clearStagedRegion() {
@@ -2189,6 +3076,20 @@ function rotateCanvas(dir) {
   fitImage();
   renderRegionOverlay();
 }
+
+// Cmd/Alt held → crosshair cursor over existing regions (draw-through mode)
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Meta' || e.key === 'Control' || e.key === 'Alt') {
+    const svg = document.getElementById('region-overlay');
+    if (svg) svg.classList.add('draw-mode');
+  }
+});
+document.addEventListener('keyup', (e) => {
+  if (e.key === 'Meta' || e.key === 'Control' || e.key === 'Alt') {
+    const svg = document.getElementById('region-overlay');
+    if (svg) svg.classList.remove('draw-mode');
+  }
+});
 
 // Re-fit on window resize
 window.addEventListener('resize', () => {
@@ -2231,6 +3132,74 @@ window.addEventListener('resize', () => {
   });
 })();
 
+// ── Export ──
+async function exportAnnotations(scope, path) {
+  const btn = document.getElementById('btn-export');
+  const origText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Exporting...';
+  try {
+    const res = await fetch('/api/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope, path }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Export failed');
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const disposition = res.headers.get('Content-Disposition') || '';
+    a.download = disposition.match(/filename="(.+)"/)?.[1] || 'export.zip';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert('Export failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = origText;
+    document.getElementById('export-dropdown').style.display = 'none';
+  }
+}
+
+document.getElementById('btn-export').addEventListener('click', () => {
+  const dd = document.getElementById('export-dropdown');
+  const isOpen = dd.style.display !== 'none';
+  dd.style.display = isOpen ? 'none' : 'block';
+  if (!isOpen) {
+    // Show "This Image" only when viewing a file in gallery mode
+    const fileOpt = document.getElementById('export-file');
+    fileOpt.style.display = galleryMode ? 'block' : 'none';
+    // Update dir label
+    const dirOpt = document.getElementById('export-dir');
+    dirOpt.textContent = currentDir ? `This Directory (${currentDir})` : 'This Directory (root)';
+  }
+});
+
+// Close dropdown on outside click
+document.addEventListener('click', (e) => {
+  const wrapper = document.querySelector('.export-wrapper');
+  if (wrapper && !wrapper.contains(e.target)) {
+    document.getElementById('export-dropdown').style.display = 'none';
+  }
+});
+
+document.getElementById('export-file').addEventListener('click', () => {
+  const file = onlyFiles()[currentIndex];
+  if (file) exportAnnotations('file', file.path);
+});
+document.getElementById('export-dir').addEventListener('click', () => {
+  exportAnnotations('directory', currentDir);
+});
+document.getElementById('export-root').addEventListener('click', () => {
+  exportAnnotations('root', '');
+});
+
 // ── Event Listeners ──
 document.getElementById('btn-add-context').addEventListener('click', startAddContext);
 document.getElementById('btn-back').addEventListener('click', exitGallery);
@@ -2245,11 +3214,16 @@ document.getElementById('btn-toggle-annotations').addEventListener('click', () =
   renderRegionOverlay();
 });
 
-// Comment input: Cmd+Enter or Ctrl+Enter to submit
+// Comment input: Enter to submit (Shift+Enter for newline); empty input + staged region → Ask Claude
 document.getElementById('comment-input').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+  if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    addComment();
+    const hasText = document.getElementById('comment-input').value.trim();
+    if (hasText) {
+      addComment();
+    } else if (stagedRegion) {
+      describeRegionWithClaude();
+    }
   }
 });
 
@@ -2287,8 +3261,23 @@ document.addEventListener('keydown', (e) => {
     case '/': document.getElementById('comment-input').focus(); e.preventDefault(); break;
     case 'r': case 'R': toggleRecording(); e.preventDefault(); break;
     case 's': case 'S': skipFile(); e.preventDefault(); break;
+    case 'Delete':
+    case 'Backspace':
+      if (selectedRegionIndex !== null) {
+        const file = onlyFiles()[currentIndex];
+        if (file) {
+          const idx = selectedRegionIndex;
+          selectedRegionIndex = null;
+          deleteComment(file.path, idx);
+        }
+        e.preventDefault();
+      }
+      break;
     case 'Escape':
-      if (editingRegionIndex !== null) {
+      if (selectedRegionIndex !== null) {
+        selectedRegionIndex = null;
+        renderRegionOverlay();
+      } else if (editingRegionIndex !== null) {
         editingRegionIndex = null;
         renderRegionOverlay();
       } else {
@@ -2537,7 +3526,7 @@ document.getElementById('btn-ask-claude').addEventListener('click', async () => 
     btn.textContent = 'Ask Claude';
     btn.classList.remove('loading');
     await reloadCurrentDir();
-    renderGalleryItem();
+    refreshSidebar();
   }
 });
 
@@ -2567,7 +3556,7 @@ document.getElementById('btn-auto-annotate').addEventListener('click', async () 
     btn.innerHTML = btnSvg;
     btn.classList.remove('loading');
     await reloadCurrentDir();
-    renderGalleryItem();
+    refreshSidebar();
   }
 });
 
@@ -2647,42 +3636,49 @@ document.getElementById('btn-copy-context').addEventListener('click', async () =
     const natH = img.naturalHeight;
     const comments = file.comments || [];
 
-    // --- Measure the legend area ---
-    const legendPad = Math.round(natW * 0.03);
-    const fontSize = Math.max(14, Math.round(natW / 100));
-    const lineHeight = Math.round(fontSize * 1.5);
-    const maxTextW = natW - legendPad * 2;
+    // --- Right rail layout (image left, annotations right) ---
+    const railWidth = Math.round(natW * 0.38);
+    const railPad = Math.round(railWidth * 0.06);
+    const fontSize = Math.max(13, Math.round(railWidth / 22));
+    const lineHeight = Math.round(fontSize * 1.55);
+    const maxTextW = railWidth - railPad * 2;
+    const titleFontSize = Math.round(fontSize * 1.15);
+    const numFontSize = Math.round(fontSize * 0.85);
 
-    // Pre-compute wrapped lines for each comment
+    // Pre-compute wrapped lines
     const measureCanvas = document.createElement('canvas');
     const measureCtx = measureCanvas.getContext('2d');
     measureCtx.font = `${fontSize}px -apple-system, system-ui, sans-serif`;
-    const boldMeasureCtx = measureCanvas.getContext('2d');
 
     const commentBlocks = comments.map((c, i) => {
-      const prefix = `#${i + 1} (${c.author}): `;
-      const regionTag = c.region ? ` [region ${Math.round(c.region.x)}%-${Math.round(c.region.x + c.region.w)}% x, ${Math.round(c.region.y)}%-${Math.round(c.region.y + c.region.h)}% y]` : '';
-      const fullText = prefix + c.text + regionTag;
-      const lines = wrapText(measureCtx, fullText, maxTextW);
-      return { index: i, comment: c, prefix, lines };
+      const lines = wrapText(measureCtx, c.text, maxTextW - railPad);
+      return { index: i, comment: c, lines };
     });
 
-    const totalLines = commentBlocks.reduce((sum, b) => sum + b.lines.length, 0);
-    const titleLineH = Math.round(fontSize * 1.8);
-    const legendH = titleLineH + totalLines * lineHeight + legendPad * 2 + (commentBlocks.length - 1) * Math.round(lineHeight * 0.3);
+    // Calculate rail height — at minimum match image height
+    const commentGap = Math.round(lineHeight * 0.8);
+    const headerH = Math.round(titleFontSize * 3);
+    const contentH = commentBlocks.reduce((sum, b) => sum + (numFontSize + 4) + b.lines.length * lineHeight + commentGap, 0);
+    const railH = Math.max(natH, headerH + contentH + railPad * 2);
 
     // --- Draw everything ---
     const canvas = document.createElement('canvas');
-    canvas.width = natW;
-    canvas.height = natH + (comments.length > 0 ? legendH : 0);
+    const totalW = comments.length > 0 ? natW + railWidth : natW;
+    const totalH = comments.length > 0 ? Math.max(natH, railH) : natH;
+    canvas.width = totalW;
+    canvas.height = totalH;
     const ctx = canvas.getContext('2d');
 
-    // Draw image
+    // Dark background behind everything
+    ctx.fillStyle = '#141414';
+    ctx.fillRect(0, 0, totalW, totalH);
+
+    // Draw image on left
     ctx.drawImage(img, 0, 0, natW, natH);
 
     // Draw region rectangles on image
     ctx.strokeStyle = '#00ff66';
-    ctx.lineWidth = Math.max(5, Math.round(natW / 300));
+    ctx.lineWidth = Math.max(4, Math.round(natW / 350));
     comments.filter(c => c.region).forEach(c => {
       const r = c.region;
       const x = (r.x / 100) * natW;
@@ -2691,7 +3687,7 @@ document.getElementById('btn-copy-context').addEventListener('click', async () =
       const h = (r.h / 100) * natH;
       ctx.strokeRect(x, y, w, h);
       const label = `#${comments.indexOf(c) + 1}`;
-      const labelFontSize = Math.max(16, Math.round(natW / 120));
+      const labelFontSize = Math.max(14, Math.round(natW / 130));
       ctx.font = `bold ${labelFontSize}px -apple-system, sans-serif`;
       const metrics = ctx.measureText(label);
       const pad = 4;
@@ -2701,48 +3697,61 @@ document.getElementById('btn-copy-context').addEventListener('click', async () =
       ctx.fillText(label, x + pad, y - pad);
     });
 
-    // Draw legend below image
+    // Draw right rail
     if (comments.length > 0) {
-      // Dark background
-      ctx.fillStyle = '#1a1a2e';
-      ctx.fillRect(0, natH, natW, legendH);
+      const rx = natW;
 
-      // Title
-      ctx.fillStyle = '#00ff66';
-      ctx.font = `bold ${Math.round(fontSize * 1.2)}px -apple-system, system-ui, sans-serif`;
-      ctx.fillText(`Annotations — ${file.name}`, legendPad, natH + legendPad + fontSize);
+      // Rail background
+      ctx.fillStyle = '#1a1a1a';
+      ctx.fillRect(rx, 0, railWidth, totalH);
 
-      // Separator line
-      const sepY = natH + titleLineH + legendPad * 0.5;
-      ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+      // Subtle left border
+      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(legendPad, sepY);
-      ctx.lineTo(natW - legendPad, sepY);
+      ctx.moveTo(rx, 0);
+      ctx.lineTo(rx, totalH);
       ctx.stroke();
 
-      // Comment text
-      let curY = natH + titleLineH + legendPad;
-      ctx.font = `${fontSize}px -apple-system, system-ui, sans-serif`;
+      // Title
+      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+      ctx.font = `600 ${titleFontSize}px -apple-system, system-ui, sans-serif`;
+      ctx.fillText(file.name, rx + railPad, railPad + titleFontSize);
 
-      commentBlocks.forEach((block, bi) => {
-        block.lines.forEach((line, li) => {
+      // Subtitle
+      ctx.fillStyle = 'rgba(255,255,255,0.3)';
+      ctx.font = `${numFontSize}px -apple-system, system-ui, sans-serif`;
+      ctx.fillText(`${comments.length} annotation${comments.length !== 1 ? 's' : ''}`, rx + railPad, railPad + titleFontSize + numFontSize + 6);
+
+      // Separator
+      const sepY = headerH - 4;
+      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+      ctx.beginPath();
+      ctx.moveTo(rx + railPad, sepY);
+      ctx.lineTo(rx + railWidth - railPad, sepY);
+      ctx.stroke();
+
+      // Comments
+      let curY = headerH + railPad;
+
+      commentBlocks.forEach((block) => {
+        // Number badge
+        const badge = `#${block.index + 1}`;
+        const authorLabel = block.comment.author === 'claude' ? 'CLAUDE' : 'USER';
+        ctx.font = `bold ${numFontSize}px -apple-system, system-ui, sans-serif`;
+        ctx.fillStyle = block.comment.author === 'claude' ? '#eab308' : '#3b82f6';
+        ctx.fillText(`${authorLabel}  ${badge}`, rx + railPad, curY + numFontSize);
+        curY += numFontSize + 6;
+
+        // Comment text
+        ctx.font = `${fontSize}px -apple-system, system-ui, sans-serif`;
+        ctx.fillStyle = 'rgba(255,255,255,0.85)';
+        block.lines.forEach((line) => {
+          ctx.fillText(line, rx + railPad, curY + fontSize);
           curY += lineHeight;
-          if (li === 0) {
-            // First line: draw the #N prefix in accent color
-            const prefixW = ctx.measureText(block.prefix).width;
-            ctx.fillStyle = '#00ff66';
-            ctx.font = `bold ${fontSize}px -apple-system, system-ui, sans-serif`;
-            ctx.fillText(block.prefix, legendPad, curY);
-            ctx.fillStyle = 'rgba(255,255,255,0.9)';
-            ctx.font = `${fontSize}px -apple-system, system-ui, sans-serif`;
-            ctx.fillText(line.slice(block.prefix.length), legendPad + prefixW, curY);
-          } else {
-            ctx.fillStyle = 'rgba(255,255,255,0.9)';
-            ctx.fillText(line, legendPad, curY);
-          }
         });
-        curY += Math.round(lineHeight * 0.3); // gap between comments
+
+        curY += commentGap;
       });
     }
 
@@ -2779,7 +3788,7 @@ if (typeof marked !== 'undefined') {
         // Handle comment:FILENAME:INDEX links
         const commentMatch = href && href.match(/^comment:(.+):(\d+)$/);
         if (commentMatch) {
-          const filename = commentMatch[1];
+          const filename = decodeURIComponent(commentMatch[1]);
           const commentIndex = commentMatch[2];
           return `<a class="ref-comment" data-ref-type="comment" data-file="${escapeAttr(filename)}" data-comment-index="${commentIndex}" title="Go to comment #${commentIndex} on ${escapeAttr(filename)}">${text}</a>`;
         }
@@ -2787,7 +3796,7 @@ if (typeof marked !== 'undefined') {
         // Handle image:FILENAME links
         const imageMatch = href && href.match(/^image:(.+)$/);
         if (imageMatch) {
-          const filename = imageMatch[1];
+          const filename = decodeURIComponent(imageMatch[1]);
           return `<a class="ref-image" data-ref-type="image" data-file="${escapeAttr(filename)}" title="View ${escapeAttr(filename)}">${text}</a>`;
         }
 
@@ -2806,11 +3815,19 @@ async function loadSummary() {
     summaryRawContent = data.content;
     summaryLastModified = data.lastModified;
     if (!summaryEditMode) renderSummary();
-  } else if (data.content === null && summaryRawContent) {
+  } else if (data.content === null) {
     summaryRawContent = '';
     summaryLastModified = null;
     if (!summaryEditMode) renderSummary();
   }
+}
+
+function fixCitationLinks(md) {
+  // Encode spaces inside (comment:...) and (image:...) links so marked can parse them
+  return md.replace(/\]\((comment|image):([^)]+)\)/g, (match, type, path) => {
+    const encoded = path.replace(/ /g, '%20');
+    return `](${type}:${encoded})`;
+  });
 }
 
 function renderSummary() {
@@ -2822,7 +3839,8 @@ function renderSummary() {
   if (summaryEditMode) {
     el.innerHTML = `<textarea class="summary-editor" id="summary-editor">${escapeHtml(summaryRawContent)}</textarea>`;
   } else {
-    const html = (typeof marked !== 'undefined') ? marked.parse(summaryRawContent) : `<pre>${escapeHtml(summaryRawContent)}</pre>`;
+    const fixed = fixCitationLinks(summaryRawContent);
+    const html = (typeof marked !== 'undefined') ? marked.parse(fixed) : `<pre>${escapeHtml(summaryRawContent)}</pre>`;
     el.innerHTML = `<div class="summary-rendered">${html}</div>`;
   }
 }
@@ -2886,6 +3904,42 @@ async function generateSummaryAction(aggregate = false) {
   if (!btn) return;
   btn.disabled = true;
   btn.textContent = 'Generating...';
+
+  // Also disable the other generate button
+  const otherBtn = aggregate ? document.getElementById('btn-generate-summary') : document.getElementById('btn-generate-aggregate');
+  if (otherBtn) otherBtn.disabled = true;
+
+  // Show loading state in summary content area
+  const el = document.getElementById('summary-content');
+  const scope = aggregate ? 'all directories' : (currentDir || 'root');
+  const steps = [
+    'Reading annotations...',
+    'Scanning text documents...',
+    'Analyzing with Claude...',
+    'Structuring summary...',
+  ];
+  let stepIdx = 0;
+  el.innerHTML = `
+    <div class="summary-loading">
+      <div class="summary-loading-spinner"></div>
+      <div class="summary-loading-text">
+        Generating summary for <strong>${escapeHtml(scope)}</strong>
+        <div class="summary-loading-step" id="loading-step">${steps[0]}</div>
+      </div>
+      <div class="summary-loading-shimmer">
+        <div class="shimmer-line"></div>
+        <div class="shimmer-line"></div>
+        <div class="shimmer-line"></div>
+        <div class="shimmer-line"></div>
+      </div>
+    </div>`;
+
+  const stepInterval = setInterval(() => {
+    stepIdx = Math.min(stepIdx + 1, steps.length - 1);
+    const stepEl = document.getElementById('loading-step');
+    if (stepEl) stepEl.textContent = steps[stepIdx];
+  }, 3000);
+
   try {
     let url = '/api/summary/generate';
     const params = [];
@@ -2895,6 +3949,7 @@ async function generateSummaryAction(aggregate = false) {
     const res = await api(url, { method: 'POST', body: {} });
     if (res.error) {
       alert('Error: ' + res.error);
+      renderSummary(); // restore previous state
     } else if (res.content) {
       summaryRawContent = res.content;
       summaryCurrentVersion = res.version;
@@ -2905,9 +3960,12 @@ async function generateSummaryAction(aggregate = false) {
     }
   } catch (e) {
     alert('Failed to generate summary: ' + e.message);
+    renderSummary();
   } finally {
+    clearInterval(stepInterval);
     btn.disabled = false;
     btn.textContent = aggregate ? 'Generate All' : 'Generate';
+    if (otherBtn) otherBtn.disabled = false;
   }
 }
 
@@ -2979,6 +4037,599 @@ document.getElementById('summary-content').addEventListener('click', (e) => {
     navigateToImage(filename);
   }
 });
+
+// ── Chat Panel ──
+const CHAT_STORAGE_KEY = 'conan-chats';
+let chatOpen = false;
+let chatHistory = [];
+let chatScope = 'directory';
+let chatSending = false;
+let chatSessions = []; // [{id, title, messages, ts}]
+let activeChatId = null;
+
+function loadChatSessions() {
+  try {
+    chatSessions = JSON.parse(localStorage.getItem(CHAT_STORAGE_KEY) || '[]');
+  } catch { chatSessions = []; }
+}
+
+function saveChatSessions() {
+  // Update active session
+  if (activeChatId) {
+    const s = chatSessions.find(c => c.id === activeChatId);
+    if (s) {
+      s.messages = chatHistory;
+      s.ts = Date.now();
+    }
+  }
+  localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chatSessions));
+}
+
+function newChat() {
+  const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const session = { id, title: 'New chat', messages: [], ts: Date.now() };
+  chatSessions.unshift(session);
+  activeChatId = id;
+  chatHistory = session.messages;
+  saveChatSessions();
+  renderChatMessages();
+  renderChatHistoryBar();
+  document.getElementById('chat-input').focus();
+}
+
+function switchChat(id) {
+  saveChatSessions(); // save current first
+  const s = chatSessions.find(c => c.id === id);
+  if (!s) return;
+  activeChatId = id;
+  chatHistory = s.messages;
+  renderChatMessages();
+  renderChatHistoryBar();
+}
+
+function deleteChat(id) {
+  chatSessions = chatSessions.filter(c => c.id !== id);
+  if (activeChatId === id) {
+    if (chatSessions.length > 0) {
+      switchChat(chatSessions[0].id);
+    } else {
+      newChat();
+    }
+  }
+  saveChatSessions();
+  renderChatHistoryBar();
+}
+
+function renderChatHistoryBar() {
+  const bar = document.getElementById('chat-history-bar');
+  let html = '<button class="chat-new-btn" id="chat-new-btn" title="New chat">+ New</button>';
+  chatSessions.forEach(s => {
+    const active = s.id === activeChatId ? ' active' : '';
+    const label = escapeHtml(s.title);
+    html += `<button class="chat-history-btn${active}" data-chat-id="${s.id}" title="${label}">${label}</button>`;
+  });
+  if (activeChatId && chatHistory.length > 0) {
+    html += `<button class="chat-delete-chat" data-delete-id="${activeChatId}" title="Delete this chat">&times;</button>`;
+  }
+  bar.innerHTML = html;
+
+  // Re-bind new chat button
+  document.getElementById('chat-new-btn').addEventListener('click', newChat);
+  // Bind history buttons
+  bar.querySelectorAll('.chat-history-btn').forEach(btn => {
+    btn.addEventListener('click', () => switchChat(btn.dataset.chatId));
+  });
+  // Bind delete
+  const delBtn = bar.querySelector('.chat-delete-chat');
+  if (delBtn) delBtn.addEventListener('click', () => deleteChat(delBtn.dataset.deleteId));
+}
+
+function toggleChat() {
+  chatOpen = !chatOpen;
+  const panel = document.getElementById('chat-panel');
+  const chatBtn = document.getElementById('btn-chat');
+  if (chatOpen) {
+    panel.classList.add('open');
+    document.body.classList.add('chat-open');
+    chatBtn.style.background = 'var(--surface-2)';
+    chatBtn.style.color = 'var(--accent)';
+    // Force reflow then show
+    requestAnimationFrame(() => {
+      document.getElementById('chat-input').focus();
+    });
+    // Load sessions and ensure one exists
+    loadChatSessions();
+    if (chatSessions.length === 0) {
+      newChat();
+    } else {
+      if (!activeChatId) activeChatId = chatSessions[0].id;
+      const s = chatSessions.find(c => c.id === activeChatId);
+      if (s) chatHistory = s.messages;
+      renderChatMessages();
+      renderChatHistoryBar();
+    }
+  } else {
+    saveChatSessions();
+    panel.classList.remove('open');
+    document.body.classList.remove('chat-open');
+    chatBtn.style.background = '';
+    chatBtn.style.color = '';
+  }
+}
+
+function processChatRefs(html) {
+  html = html.replace(/\[\[comment:([^\]#]+)#(\d+)\]\]/g, (_, file, idx) => {
+    const encoded = escapeHtml(file);
+    return `<a class="chat-ref chat-ref-comment" data-ref-type="comment" data-ref-file="${encoded}" data-ref-idx="${idx}" title="Go to comment #${idx} on ${encoded}"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>${encoded} #${idx}</a>`;
+  });
+  html = html.replace(/\[\[file:([^\]]+)\]\]/g, (_, file) => {
+    const encoded = escapeHtml(file);
+    return `<a class="chat-ref chat-ref-file" data-ref-type="file" data-ref-file="${encoded}" title="Open ${encoded}"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>${encoded}</a>`;
+  });
+  return html;
+}
+
+function renderChatMessages() {
+  const container = document.getElementById('chat-messages');
+  const empty = document.getElementById('chat-empty');
+  if (chatHistory.length === 0) {
+    if (empty) empty.style.display = '';
+    else container.innerHTML = '<div class="chat-empty" id="chat-empty"><div class="chat-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 2L14.09 8.26L20 9.27L15.55 13.97L16.91 20L12 16.9L7.09 20L8.45 13.97L4 9.27L9.91 8.26L12 2Z" fill="url(#chatGrad)"/><defs><linearGradient id="chatGrad" x1="4" y1="2" x2="20" y2="20" gradientUnits="userSpaceOnUse"><stop stop-color="#3b82f6"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient></defs></svg></div><div class="chat-empty-title">Ask about your files</div><div class="chat-empty-desc">Chat with Claude about your annotations, patterns, and design decisions.</div><div class="chat-suggestions" id="chat-suggestions"><button class="chat-suggestion">What patterns do you see across annotations?</button><button class="chat-suggestion">Which files still need annotation?</button><button class="chat-suggestion">Summarize the key decisions made so far</button><button class="chat-suggestion">What components have been identified?</button></div></div>';
+    // Rebind suggestions
+    container.querySelectorAll('.chat-suggestion').forEach(btn => {
+      btn.addEventListener('click', () => { document.getElementById('chat-input').value = ''; sendChatMessage(btn.textContent); });
+    });
+    return;
+  }
+  if (empty) empty.style.display = 'none';
+
+  const copyIcon = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+  let html = '';
+  chatHistory.forEach((msg, i) => {
+    const isError = msg.role === 'assistant' && (msg.content.startsWith('Error:') || msg.content.startsWith('Failed to reach'));
+    if (msg.role === 'user') {
+      html += `<div class="chat-msg user" style="animation-delay:${i * 0.03}s">${escapeHtml(msg.content)}</div>`;
+    } else if (isError) {
+      html += `<div class="chat-msg assistant chat-msg-error" style="animation-delay:${i * 0.03}s">${escapeHtml(msg.content)}</div>`;
+    } else {
+      let rendered = (typeof marked !== 'undefined') ? marked.parse(msg.content) : escapeHtml(msg.content);
+      rendered = processChatRefs(rendered);
+      html += `<div class="chat-msg assistant" style="animation-delay:${i * 0.03}s"><div class="chat-msg-rendered">${rendered}</div><div class="chat-msg-actions"><button class="chat-copy-btn" data-copy-idx="${i}">${copyIcon} Copy</button></div></div>`;
+    }
+  });
+  container.innerHTML = html;
+  container.scrollTop = container.scrollHeight;
+}
+
+function showChatTyping() {
+  const container = document.getElementById('chat-messages');
+  const empty = document.getElementById('chat-empty');
+  if (empty) empty.style.display = 'none';
+  const typing = document.createElement('div');
+  typing.className = 'chat-typing';
+  typing.id = 'chat-typing';
+  typing.innerHTML = '<div class="chat-typing-dot"></div><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div>';
+  container.appendChild(typing);
+  container.scrollTop = container.scrollHeight;
+}
+
+function removeChatTyping() {
+  const el = document.getElementById('chat-typing');
+  if (el) el.remove();
+}
+
+async function sendChatMessage(text) {
+  if (!text || chatSending) return;
+  if (!hasApiKey) {
+    document.getElementById('btn-settings').click();
+    return;
+  }
+
+  chatSending = true;
+  const sendBtn = document.getElementById('chat-send');
+  sendBtn.disabled = true;
+
+  // Capture attachments for this message and clear them
+  const msgAttachments = [...chatAttachments];
+  chatAttachments = [];
+  renderChatAttachments();
+
+  // Display user message with attachment indicators
+  const attachLabels = msgAttachments.map(a => a.type === 'project' ? (a.region ? `${a.path} (crop)` : a.path) : a.name);
+  const displayText = attachLabels.length > 0
+    ? text + '\n\n' + attachLabels.map(l => `📎 ${l}`).join('\n')
+    : text;
+  chatHistory.push({ role: 'user', content: displayText });
+
+  // Auto-title from first user message
+  if (activeChatId) {
+    const s = chatSessions.find(c => c.id === activeChatId);
+    if (s && s.title === 'New chat') {
+      s.title = text.length > 40 ? text.slice(0, 40) + '...' : text;
+      renderChatHistoryBar();
+    }
+  }
+  renderChatMessages();
+  showChatTyping();
+
+  // Build attachments payload for server
+  const apiAttachments = msgAttachments.map(a => {
+    if (a.type === 'project') {
+      const att = { type: 'project', path: a.path };
+      if (a.region) att.region = a.region;
+      return att;
+    }
+    return { type: 'upload', data: a.data, mediaType: a.mediaType, name: a.name };
+  });
+
+  try {
+    const res = await api('/api/chat', {
+      method: 'POST',
+      body: {
+        message: text,
+        history: chatHistory.slice(0, -1),
+        scope: chatScope,
+        dir: currentDir,
+        attachments: apiAttachments,
+      },
+    });
+
+    removeChatTyping();
+
+    if (res.error) {
+      chatHistory.push({ role: 'assistant', content: 'Error: ' + res.error });
+    } else {
+      chatHistory.push({ role: 'assistant', content: res.reply });
+    }
+    renderChatMessages();
+    saveChatSessions();
+  } catch (e) {
+    removeChatTyping();
+    chatHistory.push({ role: 'assistant', content: 'Failed to reach Claude: ' + e.message });
+    renderChatMessages();
+    saveChatSessions();
+  } finally {
+    chatSending = false;
+    sendBtn.disabled = false;
+  }
+}
+
+// ── Context Menu (right-click "Send to Chat") ──
+function showContextMenu(x, y, items) {
+  // Remove any existing context menu
+  document.querySelectorAll('.ctx-menu').forEach(m => m.remove());
+
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+
+  const icons = {
+    sparkle: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 2L14.09 8.26L20 9.27L15.55 13.97L16.91 20L12 16.9L7.09 20L8.45 13.97L4 9.27L9.91 8.26L12 2Z" fill="currentColor"/></svg>',
+    image: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="2"/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/><path d="M21 15l-5-5L5 21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  };
+
+  items.forEach(item => {
+    const btn = document.createElement('button');
+    btn.className = 'ctx-menu-item';
+    btn.innerHTML = (icons[item.icon] || '') + '<span>' + item.label + '</span>';
+    btn.addEventListener('click', () => { menu.remove(); item.action(); });
+    menu.appendChild(btn);
+  });
+
+  document.body.appendChild(menu);
+
+  // Adjust if off-screen
+  const rect = menu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) menu.style.left = (window.innerWidth - rect.width - 8) + 'px';
+  if (rect.bottom > window.innerHeight) menu.style.top = (window.innerHeight - rect.height - 8) + 'px';
+
+  // Close on click outside or Escape
+  const close = (e) => {
+    if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('mousedown', close); document.removeEventListener('keydown', escClose); }
+  };
+  const escClose = (e) => { if (e.key === 'Escape') { menu.remove(); document.removeEventListener('mousedown', close); document.removeEventListener('keydown', escClose); } };
+  setTimeout(() => { document.addEventListener('mousedown', close); document.addEventListener('keydown', escClose); }, 0);
+}
+
+// ── Drag-to-Chat ──
+// Make grid items draggable
+function setupGridDrag() {
+  document.querySelectorAll('.grid-item[data-filename]').forEach(el => {
+    const filename = el.dataset.filename;
+    if (!/\.(jpe?g|png|gif|webp)$/i.test(filename)) return;
+    el.setAttribute('draggable', 'true');
+    el.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('application/x-conan-file', JSON.stringify({ path: filename }));
+      e.dataTransfer.effectAllowed = 'copy';
+    });
+    // Right-click on grid items
+    el.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      showContextMenu(e.clientX, e.clientY, [
+        { label: 'Send to Chat', icon: 'sparkle', action: () => {
+          addProjectAttachment(filename, null, filename.split('/').pop());
+          if (!chatOpen) toggleChat();
+        }},
+      ]);
+    });
+  });
+}
+
+// Drop zone on chat panel
+(function setupChatDropZone() {
+  const panel = document.getElementById('chat-panel');
+  if (!panel) return;
+  let dragCounter = 0;
+
+  panel.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    dragCounter++;
+    panel.classList.add('drop-hover');
+  });
+  panel.addEventListener('dragleave', (e) => {
+    dragCounter--;
+    if (dragCounter <= 0) { dragCounter = 0; panel.classList.remove('drop-hover'); }
+  });
+  panel.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  });
+  panel.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dragCounter = 0;
+    panel.classList.remove('drop-hover');
+
+    // Check for internal conan file drag
+    const conanData = e.dataTransfer.getData('application/x-conan-file');
+    if (conanData) {
+      try {
+        const data = JSON.parse(conanData);
+        if (data.path) {
+          addProjectAttachment(data.path, data.region || null, data.label || data.path.split('/').pop());
+        }
+      } catch (err) { console.error('Drop parse error:', err); }
+      return;
+    }
+
+    // Check for external file drops (images from desktop)
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      Array.from(e.dataTransfer.files).forEach(file => {
+        if (!file.type.startsWith('image/')) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          const base64 = reader.result.split(',')[1];
+          chatAttachments.push({ type: 'upload', data: base64, mediaType: file.type, name: file.name, thumbUrl: reader.result });
+          renderChatAttachments();
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+  });
+})();
+
+// Hook into renderGrid to set up drag after each render
+const _origRenderGrid = renderGrid;
+renderGrid = function() {
+  _origRenderGrid();
+  setupGridDrag();
+};
+
+// ── Chat Attachments ──
+let chatAttachments = []; // [{type:"project",path:"...",thumbUrl:"..."} or {type:"upload",data:"base64",mediaType:"...",name:"...",thumbUrl:"..."}]
+
+function renderChatAttachments() {
+  const container = document.getElementById('chat-attachments');
+  if (chatAttachments.length === 0) {
+    container.style.display = 'none';
+    return;
+  }
+  container.style.display = 'flex';
+  container.innerHTML = chatAttachments.map((att, i) => {
+    const label = att.type === 'project' ? att.path.split('/').pop() : att.name;
+    return `<div class="chat-attachment-thumb"><img src="${att.thumbUrl}"><button class="remove-attachment" data-att-idx="${i}">&times;</button><div class="chat-attachment-label">${escapeHtml(label)}</div></div>`;
+  }).join('');
+  container.querySelectorAll('.remove-attachment').forEach(btn => {
+    btn.addEventListener('click', () => {
+      chatAttachments.splice(parseInt(btn.dataset.attIdx), 1);
+      renderChatAttachments();
+    });
+  });
+}
+
+function cropUrl(filePath, region) {
+  return `/api/files/${encodeURIComponent(filePath)}/crop?x=${region.x}&y=${region.y}&w=${region.w}&h=${region.h}`;
+}
+
+function addProjectAttachment(filePath, region, label) {
+  const key = region ? `${filePath}#${region.x},${region.y},${region.w},${region.h}` : filePath;
+  if (chatAttachments.find(a => a._key === key)) return; // no duplicates
+  const thumbUrl = region ? cropUrl(filePath, region) : `/api/files/${encodeURIComponent(filePath)}/thumb`;
+  chatAttachments.push({
+    type: 'project', path: filePath, region: region || null,
+    thumbUrl, _key: key, _label: label || filePath.split('/').pop(),
+  });
+  renderChatAttachments();
+}
+
+function showProjectFilePicker() {
+  const imageFiles = files.filter(f => f.type === 'file' && /\.(jpe?g|png|gif|webp)$/i.test(f.name));
+  if (imageFiles.length === 0) { alert('No image files in current directory'); return; }
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:200;display:flex;align-items:center;justify-content:center';
+  const modal = document.createElement('div');
+  modal.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;max-width:600px;width:92%;max-height:75vh;overflow-y:auto';
+
+  let html = '<div style="font-weight:600;margin-bottom:12px;font-size:14px">Select images &amp; crops to attach</div>';
+  html += '<div style="display:flex;flex-direction:column;gap:12px">';
+  imageFiles.forEach(f => {
+    const crops = (f.comments || []).filter(c => c.region);
+    html += '<div style="display:flex;gap:8px;align-items:flex-start">';
+    // Full image
+    html += `<div class="pick-item" data-path="${escapeHtml(f.path)}" data-type="full" style="cursor:pointer;border-radius:8px;overflow:hidden;border:2px solid transparent;transition:border-color 0.15s;width:80px;min-width:80px;flex-shrink:0"><img src="/api/files/${encodeURIComponent(f.path)}/thumb" style="width:100%;aspect-ratio:1;object-fit:cover;display:block"><div style="font-size:9px;padding:2px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-muted)">${escapeHtml(f.name)}</div></div>`;
+    // Crops
+    if (crops.length > 0) {
+      html += '<div style="display:flex;flex-wrap:wrap;gap:6px;padding-top:2px">';
+      crops.forEach((c, ci) => {
+        const commentIdx = f.comments.indexOf(c);
+        const r = c.region;
+        const url = cropUrl(f.path, r);
+        const label = c.text.length > 30 ? c.text.slice(0, 30) + '...' : c.text;
+        html += `<div class="pick-item" data-path="${escapeHtml(f.path)}" data-type="crop" data-region='${JSON.stringify(r)}' data-cidx="${commentIdx}" style="cursor:pointer;border-radius:6px;overflow:hidden;border:2px solid transparent;transition:border-color 0.15s;width:60px;min-width:60px"><img src="${url}" style="width:100%;aspect-ratio:1;object-fit:cover;display:block"><div style="font-size:8px;padding:1px 3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-muted)" title="${escapeHtml(c.text)}">#${commentIdx + 1} ${escapeHtml(label)}</div></div>`;
+      });
+      html += '</div>';
+    }
+    html += '</div>';
+  });
+  html += '</div>';
+  html += '<div style="margin-top:12px;text-align:right"><button class="btn btn-ghost" id="pick-cancel" style="margin-right:8px">Cancel</button><button class="btn btn-primary" id="pick-done">Attach Selected</button></div>';
+  modal.innerHTML = html;
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+
+  const selected = new Map(); // key -> {path, region, label}
+  modal.querySelectorAll('.pick-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const p = el.dataset.path;
+      const isCrop = el.dataset.type === 'crop';
+      const region = isCrop ? JSON.parse(el.dataset.region) : null;
+      const key = isCrop ? `${p}#${region.x},${region.y},${region.w},${region.h}` : p;
+      if (selected.has(key)) { selected.delete(key); el.style.borderColor = 'transparent'; }
+      else { selected.set(key, { path: p, region }); el.style.borderColor = 'var(--accent)'; }
+    });
+  });
+  modal.querySelector('#pick-cancel').addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  modal.querySelector('#pick-done').addEventListener('click', () => {
+    selected.forEach(({ path, region }) => addProjectAttachment(path, region));
+    renderChatAttachments();
+    overlay.remove();
+  });
+}
+
+// Attach button menu toggle
+document.getElementById('chat-attach-btn').addEventListener('click', () => {
+  document.getElementById('chat-attach-menu').classList.toggle('open');
+});
+document.addEventListener('click', (e) => {
+  const menu = document.getElementById('chat-attach-menu');
+  if (menu && !e.target.closest('.chat-attach-btn') && !e.target.closest('.chat-attach-menu')) {
+    menu.classList.remove('open');
+  }
+});
+
+// Project files option
+document.getElementById('chat-attach-project').addEventListener('click', () => {
+  document.getElementById('chat-attach-menu').classList.remove('open');
+  showProjectFilePicker();
+});
+
+// Upload option
+document.getElementById('chat-attach-upload').addEventListener('click', () => {
+  document.getElementById('chat-attach-menu').classList.remove('open');
+  document.getElementById('chat-file-upload').click();
+});
+document.getElementById('chat-file-upload').addEventListener('change', (e) => {
+  const fileList = e.target.files;
+  if (!fileList) return;
+  Array.from(fileList).forEach(file => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = reader.result.split(',')[1];
+      const thumbUrl = reader.result;
+      chatAttachments.push({ type: 'upload', data: base64, mediaType: file.type || 'image/png', name: file.name, thumbUrl });
+      renderChatAttachments();
+    };
+    reader.readAsDataURL(file);
+  });
+  e.target.value = ''; // reset so same file can be picked again
+});
+
+// Topbar chat button
+document.getElementById('btn-chat').addEventListener('click', toggleChat);
+
+// Send button
+document.getElementById('chat-send').addEventListener('click', () => {
+  const input = document.getElementById('chat-input');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  sendChatMessage(text);
+});
+
+// Enter to send (Shift+Enter for newline)
+document.getElementById('chat-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    const text = e.target.value.trim();
+    if (!text) return;
+    e.target.value = '';
+    sendChatMessage(text);
+  }
+});
+
+// Scope toggle
+document.querySelectorAll('.chat-scope-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.chat-scope-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    chatScope = btn.dataset.scope;
+  });
+});
+
+// Suggestion buttons (initial)
+document.querySelectorAll('.chat-suggestion').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.getElementById('chat-input').value = '';
+    sendChatMessage(btn.textContent);
+  });
+});
+
+// Copy individual message + reference clicks (delegated)
+document.getElementById('chat-messages').addEventListener('click', (e) => {
+  const ref = e.target.closest('.chat-ref');
+  if (ref) {
+    e.preventDefault();
+    const refType = ref.dataset.refType;
+    const refFile = ref.dataset.refFile;
+    if (refType === 'comment') {
+      navigateToComment(refFile, parseInt(ref.dataset.refIdx));
+    } else {
+      navigateToImage(refFile);
+    }
+    return;
+  }
+  const btn = e.target.closest('.chat-copy-btn');
+  if (!btn) return;
+  const idx = parseInt(btn.dataset.copyIdx);
+  const msg = chatHistory[idx];
+  if (!msg) return;
+  navigator.clipboard.writeText(msg.content).then(() => {
+    btn.classList.add('copied');
+    btn.innerHTML = btn.innerHTML.replace('Copy', 'Copied!');
+    setTimeout(() => {
+      btn.classList.remove('copied');
+      btn.innerHTML = btn.innerHTML.replace('Copied!', 'Copy');
+    }, 1500);
+  });
+});
+
+// Copy entire conversation
+document.getElementById('chat-copy-all').addEventListener('click', () => {
+  if (chatHistory.length === 0) return;
+  const text = chatHistory.map(m =>
+    m.role === 'user' ? `**You:** ${m.content}` : `**Claude:** ${m.content}`
+  ).join('\n\n---\n\n');
+  navigator.clipboard.writeText(text).then(() => {
+    const tip = document.getElementById('chat-copy-all-tooltip');
+    tip.classList.add('show');
+    setTimeout(() => tip.classList.remove('show'), 1500);
+  });
+});
+
+// No-op for backward compat with enterGallery/exitGallery calls
+function updateChatFabVisibility() {}
 
 // ── Hash-based directory routing ──
 function initFromHash() {

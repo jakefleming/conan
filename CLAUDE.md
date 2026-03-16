@@ -79,6 +79,10 @@ Each subdirectory is self-contained with its own:
 - `GET /api/orphans?dir=subdir` — List annotations in `.context.json` that don't match any file on disk
 - `POST /api/reconcile` — Scan entire tree, match orphaned annotations to moved files by content hash, migrate automatically
 
+### Export
+- `POST /api/export` — Export annotated regions as a zip. Body: `{ scope: "file"|"directory"|"root", path: "...", authorFilter?: "all"|"user"|"claude" }`
+  - Produces: `crops/` (deterministic filenames `{basename}_c{NNNN}.png`), `originals/` (source images), `annotations.jsonl` (one JSON per line: `image`, `source_image`, `text`, `author`, `region_pct`, `region_px`), `coco.json` (COCO detection format)
+
 ### Other
 - `GET /api/config` — Get config (hasApiKey, folder path)
 - `GET/POST /api/settings` — Get or update settings (apiKey)

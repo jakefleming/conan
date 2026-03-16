@@ -5,6 +5,7 @@
     "start": "bun run server.ts"
   },
   "dependencies": {
+    "jszip": "^3.10.1",
     "sharp": "^0.34.5"
   }
 }
