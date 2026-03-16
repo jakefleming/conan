@@ -1171,7 +1171,7 @@ async function checkOrphans() {
     orphanCount = res.count || 0;
     const banner = document.getElementById('orphan-banner');
     if (orphanCount > 0) {
-      document.getElementById('orphan-text').textContent = `${orphanCount} annotation${orphanCount > 1 ? 's' : ''} don't match any file in this folder.`;
+      document.getElementById('orphan-text').textContent = `${orphanCount} annotation${orphanCount > 1 ? 's don\'t' : ' doesn\'t'} match any file in this folder.`;
       banner.classList.add('active');
     } else {
       banner.classList.remove('active');
@@ -1186,9 +1186,13 @@ async function reconcileFiles() {
   try {
     const res = await api('/api/reconcile', { method: 'POST' });
     if (res.migrated?.length > 0) {
-      alert(`Migrated ${res.migrated.length} annotation(s). ${res.stillOrphaned} still orphaned.`);
-    } else {
-      alert(`No matches found. ${res.stillOrphaned} orphaned annotation(s) remain.`);
+      alert(`Migrated ${res.migrated.length} annotation(s).${res.stillOrphaned ? ` ${res.stillOrphaned} still orphaned.` : ''}`);
+    } else if (res.stillOrphaned > 0) {
+      const clean = confirm(`No matching files found for ${res.stillOrphaned} orphaned annotation(s). Remove them?`);
+      if (clean) {
+        const dirParam = currentDir ? `?dir=${encodeURIComponent(currentDir)}` : '';
+        await api(`/api/orphans/clean${dirParam}`, { method: 'POST' });
+      }
     }
     loadFiles();
   } catch (e) {

@@ -621,7 +621,26 @@ async function reconcileAll(): Promise<{ migrated: { from: string; to: string; f
   }
   await collectOrphans(resolvedFolder, "");
 
-  if (orphansByHash.size === 0) return { migrated: [], stillOrphaned: 0 };
+  // Count total orphans (including hashless ones that can't be matched)
+  let totalOrphans = 0;
+  async function countAllOrphans(dir: string, relPath: string) {
+    const context = await readContext(relPath);
+    const dirPath = join(resolvedFolder, relPath);
+    for (const [filename] of Object.entries(context)) {
+      if (!existsSync(join(dirPath, filename))) totalOrphans++;
+    }
+    const entries = await readdir(dir, { withFileTypes: true });
+    for (const e of entries) {
+      if (!e.isDirectory() || e.name.startsWith(".") || HIDDEN_DIRS.has(e.name)) continue;
+      const childRel = relPath ? `${relPath}/${e.name}` : e.name;
+      await countAllOrphans(join(dir, e.name), childRel);
+    }
+  }
+
+  if (orphansByHash.size === 0) {
+    await countAllOrphans(resolvedFolder, "");
+    return { migrated: [], stillOrphaned: totalOrphans };
+  }
 
   // 2. Scan all files, compute hashes for unannotated ones, try to match
   const migrated: { from: string; to: string; filename: string }[] = [];
@@ -662,7 +681,8 @@ async function reconcileAll(): Promise<{ migrated: { from: string; to: string; f
   await scanFiles(resolvedFolder, "");
 
   invalidateTreeCache();
-  return { migrated, stillOrphaned: orphansByHash.size };
+  await countAllOrphans(resolvedFolder, "");
+  return { migrated, stillOrphaned: totalOrphans };
 }
 
 const server = Bun.serve({
@@ -708,6 +728,26 @@ const server = Bun.serve({
         if (dirParam) safePath(dirParam);
         const orphans = await findOrphans(dirParam);
         return json({ orphans, count: orphans.length });
+      } catch (e: any) {
+        return json({ error: e.message }, 400);
+      }
+    }
+
+    // API: clean orphaned annotations from a directory's .context.json
+    if (path === "/api/orphans/clean" && req.method === "POST") {
+      try {
+        if (dirParam) safePath(dirParam);
+        const context = await readContext(dirParam);
+        const dirPath = join(resolvedFolder, dirParam);
+        let removed = 0;
+        for (const filename of Object.keys(context)) {
+          if (!existsSync(join(dirPath, filename))) {
+            delete context[filename];
+            removed++;
+          }
+        }
+        await writeContext(context, dirParam);
+        return json({ removed });
       } catch (e: any) {
         return json({ error: e.message }, 400);
       }
