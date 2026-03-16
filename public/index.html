@@ -376,14 +376,25 @@
     background: rgba(59, 130, 246, 0.1);
     border: 1px solid var(--accent);
     border-radius: 4px;
-    cursor: pointer;
     margin-bottom: 6px;
   }
-  .region-clear:hover { background: rgba(59, 130, 246, 0.2); }
   .region-clear .region-clear-x {
     font-size: 13px;
     line-height: 1;
+    cursor: pointer;
   }
+  .btn-claude-region {
+    background: rgba(234, 179, 8, 0.15);
+    color: var(--gold);
+    border: 1px solid var(--gold);
+    border-radius: 3px;
+    padding: 1px 6px;
+    font-size: 11px;
+    cursor: pointer;
+    margin-left: 4px;
+  }
+  .btn-claude-region:hover { background: rgba(234, 179, 8, 0.3); }
+  .btn-claude-region:disabled { opacity: 0.5; cursor: wait; }
   .gallery-preview .file-placeholder {
     text-align: center;
     color: var(--text-muted);
@@ -2119,13 +2130,51 @@ function updateStagedRegionUI() {
       el = document.createElement('div');
       el.id = 'staged-region-bar';
       el.className = 'region-clear';
-      el.innerHTML = '<span>Region selected</span><span class="region-clear-x">&times;</span>';
-      el.addEventListener('click', clearStagedRegion);
+      el.innerHTML = '<span>Region selected</span><button class="btn-claude-region" id="btn-claude-region" title="Ask Claude to describe this region">Ask Claude</button><span class="region-clear-x">&times;</span>';
+      el.querySelector('.region-clear-x').addEventListener('click', clearStagedRegion);
+      el.querySelector('#btn-claude-region').addEventListener('click', describeRegionWithClaude);
       const inputArea = document.querySelector('.sidebar-input');
       inputArea.insertBefore(el, inputArea.firstChild);
     }
   } else {
     if (el) el.remove();
+  }
+}
+
+async function describeRegionWithClaude() {
+  if (!stagedRegion) return;
+  if (!hasApiKey) {
+    document.getElementById('btn-settings').click();
+    return;
+  }
+  const file = onlyFiles()[currentIndex];
+  if (!file) return;
+
+  const btn = document.getElementById('btn-claude-region');
+  btn.disabled = true;
+  btn.textContent = 'Thinking...';
+
+  try {
+    const res = await api(`/api/files/${encodeURIComponent(file.path)}/describe-region`, {
+      method: 'POST',
+      body: { region: stagedRegion },
+    });
+    if (res.error) {
+      alert('Error: ' + res.error);
+      return;
+    }
+    stagedRegion = null;
+    updateStagedRegionUI();
+    renderRegionOverlay();
+    await reloadCurrentDir();
+    renderGalleryItem();
+  } catch (e) {
+    alert('Failed: ' + e.message);
+  } finally {
+    if (document.getElementById('btn-claude-region')) {
+      btn.disabled = false;
+      btn.textContent = 'Ask Claude';
+    }
   }
 }
 

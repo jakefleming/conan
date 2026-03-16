@@ -1,6 +1,7 @@
 import { readdir, readFile, writeFile, stat, mkdir } from "fs/promises";
 import { join, extname, basename, dirname, normalize } from "path";
 import { existsSync } from "fs";
+import sharp from "sharp";
 
 const ALLOWED_EXTENSIONS = new Set([
   ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif",
@@ -42,6 +43,50 @@ function safePath(relativePath: string): string {
 }
 
 // ── Content hashing ──
+
+function parseImageDimensions(buffer: Buffer, ext: string): { width: number; height: number } | null {
+  try {
+    if (ext === ".png") {
+      // PNG: width at bytes 16-19, height at bytes 20-23 (big-endian)
+      if (buffer.length < 24) return null;
+      const width = buffer.readUInt32BE(16);
+      const height = buffer.readUInt32BE(20);
+      return { width, height };
+    }
+    if (ext === ".jpg" || ext === ".jpeg") {
+      // JPEG: scan for SOF0 (0xFFC0) or SOF2 (0xFFC2) marker
+      let i = 2; // skip SOI marker
+      while (i < buffer.length - 9) {
+        if (buffer[i] !== 0xFF) { i++; continue; }
+        const marker = buffer[i + 1];
+        if (marker === 0xC0 || marker === 0xC2) {
+          const height = buffer.readUInt16BE(i + 5);
+          const width = buffer.readUInt16BE(i + 7);
+          return { width, height };
+        }
+        // Skip to next marker using segment length
+        if (marker >= 0xC0 && marker <= 0xFE && marker !== 0xD0 && marker !== 0xD1 &&
+            marker !== 0xD2 && marker !== 0xD3 && marker !== 0xD4 && marker !== 0xD5 &&
+            marker !== 0xD6 && marker !== 0xD7 && marker !== 0xD8 && marker !== 0xD9) {
+          const segLen = buffer.readUInt16BE(i + 2);
+          i += 2 + segLen;
+        } else {
+          i += 2;
+        }
+      }
+      return null;
+    }
+    if (ext === ".gif") {
+      if (buffer.length < 10) return null;
+      const width = buffer.readUInt16LE(6);
+      const height = buffer.readUInt16LE(8);
+      return { width, height };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 async function computeFileHash(filePath: string): Promise<string> {
   const file = Bun.file(filePath);
@@ -244,6 +289,10 @@ async function autoAnnotate(relPath: string): Promise<{ region: Region; text: st
   const base64 = imageData.toString("base64");
   const mediaType = ext === ".png" ? "image/png" : ext === ".gif" ? "image/gif" : ext === ".webp" ? "image/webp" : "image/jpeg";
 
+  // Parse image dimensions from file headers
+  const dims = parseImageDimensions(imageData, ext);
+  const dimsInfo = dims ? `\n\nImage dimensions: ${dims.width}×${dims.height} pixels (aspect ratio ${dims.width > dims.height ? 'landscape' : dims.height > dims.width * 1.5 ? 'tall/portrait' : 'portrait'}).` : "";
+
   const messages = [{
     role: "user",
     content: [
@@ -253,31 +302,40 @@ async function autoAnnotate(relPath: string): Promise<{ region: Region; text: st
       },
       {
         type: "text",
-        text: `You are analyzing a photo of a whiteboard, sketch, or document from a product/design session.${existingContext}
+        text: `You are analyzing a photo from a product/design session.${existingContext}${dimsInfo}
 
-Your task: find each distinct piece of handwritten text, label, diagram element, or visual note in this image. For each one, draw a TIGHT bounding box around JUST that element and transcribe or describe it.
+Your task: identify distinct text, labels, diagram elements, or visual notes in this image and provide tight bounding boxes for each.
 
-Think of this like OCR — each annotation should wrap ONE specific thing: a single label, a single list, a single diagram, a single arrow with text, etc. NOT large areas of the image.
+IMPORTANT — Spatial reasoning steps (you MUST do this before outputting coordinates):
+1. Mentally divide the image into a 10×10 grid. Column 1 = leftmost 10% (x: 0-10), Column 10 = rightmost 10% (x: 90-100). Row 1 = topmost 10% (y: 0-10), Row 10 = bottommost 10% (y: 90-100).
+2. For EACH element you find, first determine which grid cell(s) it occupies. For example, a title at the very top-left would be in cells (col 1-3, row 1).
+3. THEN convert grid positions to percentage coordinates.
 
-Return ONLY a valid JSON array. No other text before or after.
+Calibration guide:
+- An element at the very top of the image → y should be 0-5
+- An element at the very bottom → y should be 90-100
+- An element at the far left → x should be 0-10
+- An element centered horizontally → x should be ~35-45 with w ~15-25
+- The vertical midpoint of the image is y=50. Content in the upper half MUST have y < 50.
 
-Format: [{"region":{"x":N,"y":N,"w":N,"h":N},"text":"what this element says or shows"}]
+Output format — return a JSON array wrapped in <annotations> tags:
+<annotations>[{"grid":"cols 1-4, rows 1-2","region":{"x":N,"y":N,"w":N,"h":N},"text":"description"}]</annotations>
+
+The "grid" field is your reasoning about which grid cells the element occupies. The "region" field has the precise percentage coordinates derived from that grid reasoning.
 
 Coordinate rules:
 - x, y, w, h are percentages (0-100) of the FULL image width and height
-- x,y = top-left corner of the box, w,h = width and height of the box
-- Boxes should be TIGHT — just big enough to contain the element, with minimal padding
-- Typical box width: 5-20% of image. If your box is wider than 40%, it's too big — break it into smaller pieces
-- Overlapping boxes are OK when elements are close together
+- x,y = top-left corner of the bounding box
+- w,h = width and height of the bounding box
+- Boxes should be TIGHT — just big enough to contain the element
+- Typical box width: 5-30% of image width. Typical box height: 2-10% of image height.
 
 Content rules:
 - Maximum 8 annotations
 - Skip areas already covered by existing comments
-- For handwritten text: transcribe it in your note
-- For diagrams/arrows: briefly describe what they show
-- Prioritize text and labels over blank space or decorative elements
-- One element per annotation — do not group multiple distinct items into one large box
-- IGNORE any faint text bleeding through from the other side of the paper. Only annotate text/drawings that are clearly written on the front-facing side`,
+- For text: transcribe it. For diagrams/arrows: briefly describe them.
+- One element per annotation — do not group multiple items into one large box
+- IGNORE faint text bleeding through from the back of paper`,
       },
     ],
   }];
@@ -306,8 +364,9 @@ Content rules:
   pendingAutoAnnotate.delete(relPath);
   const rawText = data.content[0]?.text ?? "";
 
-  // Extract JSON array from response (Claude might wrap it in markdown code fences)
-  const jsonMatch = rawText.match(/\[[\s\S]*\]/);
+  // Extract JSON array from response — try <annotations> tags first, then fall back to raw JSON
+  const tagMatch = rawText.match(/<annotations>([\s\S]*?)<\/annotations>/);
+  const jsonMatch = tagMatch ? tagMatch[1].match(/\[[\s\S]*\]/) : rawText.match(/\[[\s\S]*\]/);
   if (!jsonMatch) throw new Error("Claude did not return a valid JSON array");
 
   let annotations: any[];
@@ -783,6 +842,113 @@ const server = Bun.serve({
         context[base].status = "annotated";
         await writeContext(context, dir);
         return json({ ok: true, text: analysis });
+      } catch (e: any) {
+        return json({ error: e.message }, 500);
+      }
+    }
+
+    // API: describe-region — Claude describes what's in a user-drawn region
+    const describeRegionMatch = path.match(/^\/api\/files\/(.+)\/describe-region$/);
+    if (describeRegionMatch && req.method === "POST") {
+      const relPath = decodeURIComponent(describeRegionMatch[1]);
+      const { dir, base } = splitRelPath(relPath);
+      try {
+        safePath(relPath);
+        const body = await req.json() as any;
+        const region = body.region;
+        if (!region || typeof region.x !== "number" || typeof region.y !== "number" ||
+            typeof region.w !== "number" || typeof region.h !== "number") {
+          return json({ error: "Missing or invalid region" }, 400);
+        }
+
+        const settings = await readSettings();
+        if (!settings.apiKey) return json({ error: "No API key configured" }, 400);
+
+        const filePath = safePath(relPath);
+        const ext = extname(base).toLowerCase();
+        if (!IMAGE_EXTENSIONS.has(ext)) return json({ error: "Only images supported" }, 400);
+
+        // Crop the image to the region using sharp
+        const img = sharp(filePath);
+        const metadata = await img.metadata();
+        const imgW = metadata.width!;
+        const imgH = metadata.height!;
+
+        const cropX = Math.round((region.x / 100) * imgW);
+        const cropY = Math.round((region.y / 100) * imgH);
+        const cropW = Math.min(Math.round((region.w / 100) * imgW), imgW - cropX);
+        const cropH = Math.min(Math.round((region.h / 100) * imgH), imgH - cropY);
+
+        const croppedBuffer = await sharp(filePath)
+          .extract({ left: cropX, top: cropY, width: Math.max(1, cropW), height: Math.max(1, cropH) })
+          .png()
+          .toBuffer();
+
+        const base64Data = croppedBuffer.toString("base64");
+
+        // Build existing comments context
+        const context = await readContext(dir);
+        const fileCtx = context[base];
+        let existingContext = "";
+        if (fileCtx?.comments?.length) {
+          existingContext = "\n\nExisting comments on this file:\n" +
+            fileCtx.comments.map((c: any) => `[${c.author}]: ${c.text}`).join("\n");
+        }
+
+        const res = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": settings.apiKey,
+            "anthropic-version": "2023-06-01",
+          },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 512,
+            messages: [{
+              role: "user",
+              content: [
+                {
+                  type: "image",
+                  source: { type: "base64", media_type: "image/png", data: base64Data },
+                },
+                {
+                  type: "text",
+                  text: `This is a cropped region from a larger image. Describe what you see. Be concise — 1-2 sentences.${existingContext}
+
+Focus on:
+- If there's text: transcribe it
+- If there's a diagram, UI element, or sketch: describe what it shows
+
+Return ONLY your description, no labels or prefixes.`,
+                },
+              ],
+            }],
+          }),
+        });
+
+        if (!res.ok) {
+          const err = await res.text();
+          return json({ error: `Claude API error: ${res.status} ${err}` }, 500);
+        }
+
+        const data = await res.json() as any;
+        const text = (data.content[0]?.text ?? "").trim();
+
+        // Save as a claude comment with the region
+        if (!context[base]) {
+          context[base] = { comments: [], status: "pending" };
+        }
+        context[base].comments.push({
+          author: "claude",
+          text,
+          ts: new Date().toISOString(),
+          region,
+        });
+        context[base].status = "annotated";
+        await writeContext(context, dir);
+
+        return json({ ok: true, text });
       } catch (e: any) {
         return json({ error: e.message }, 500);
       }
