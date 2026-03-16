@@ -1,5 +1,5 @@
 import { readdir, readFile, writeFile, stat, mkdir } from "fs/promises";
-import { join, extname, basename } from "path";
+import { join, extname, basename, dirname, normalize } from "path";
 import { existsSync } from "fs";
 
 const ALLOWED_EXTENSIONS = new Set([
@@ -20,9 +20,92 @@ const CONTEXT_FILE = ".context.json";
 const SETTINGS_FILE = ".annotator-settings.json";
 const SUMMARY_FILE = "SUMMARY.md";
 const SUMMARY_HISTORY_DIR = ".summary-history";
+const HIDDEN_DIRS = new Set([".thumbs", ".summary-history", ".git", ".DS_Store"]);
 const PORT = 3333;
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif", ".svg"]);
+
+// ── Path helpers ──
+
+function splitRelPath(relativePath: string): { dir: string; base: string } {
+  const lastSlash = relativePath.lastIndexOf("/");
+  if (lastSlash === -1) return { dir: "", base: relativePath };
+  return { dir: relativePath.substring(0, lastSlash), base: relativePath.substring(lastSlash + 1) };
+}
+
+function safePath(relativePath: string): string {
+  const resolved = normalize(join(resolvedFolder, relativePath));
+  if (!resolved.startsWith(resolvedFolder)) {
+    throw new Error("Path traversal blocked");
+  }
+  return resolved;
+}
+
+// ── Content hashing ──
+
+async function computeFileHash(filePath: string): Promise<string> {
+  const file = Bun.file(filePath);
+  const slice = file.slice(0, 65536);
+  const buffer = await slice.arrayBuffer();
+  const hasher = new Bun.CryptoHasher("sha256");
+  hasher.update(new Uint8Array(buffer));
+  return hasher.digest("hex").substring(0, 16);
+}
+
+// ── Directory tree (cached) ──
+
+type TreeEntry = {
+  name: string;
+  path: string;
+  fileCount: number;
+  annotatedCount: number;
+  children: TreeEntry[];
+};
+
+let treeCache: { data: TreeEntry; ts: number } | null = null;
+const TREE_TTL = 5000;
+
+async function scanTree(dir: string, relPath: string): Promise<TreeEntry> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const children: TreeEntry[] = [];
+  let fileCount = 0;
+
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) continue;
+    if (entry.name === SUMMARY_FILE) continue;
+    if (HIDDEN_DIRS.has(entry.name)) continue;
+
+    if (entry.isDirectory()) {
+      const childPath = relPath ? `${relPath}/${entry.name}` : entry.name;
+      children.push(await scanTree(join(dir, entry.name), childPath));
+    } else {
+      const ext = extname(entry.name).toLowerCase();
+      if (ALLOWED_EXTENSIONS.has(ext)) fileCount++;
+    }
+  }
+
+  // Read context to count annotated files
+  let annotatedCount = 0;
+  const contextPath = join(dir, CONTEXT_FILE);
+  if (existsSync(contextPath)) {
+    try {
+      const raw = await readFile(contextPath, "utf-8");
+      const ctx = JSON.parse(raw) as ContextData;
+      annotatedCount = Object.values(ctx).filter(f => f.status === "annotated").length;
+    } catch {}
+  }
+
+  return { name: basename(dir), path: relPath, fileCount, annotatedCount, children };
+}
+
+async function getTree(): Promise<TreeEntry> {
+  if (treeCache && Date.now() - treeCache.ts < TREE_TTL) return treeCache.data;
+  const tree = await scanTree(resolvedFolder, "");
+  treeCache = { data: tree, ts: Date.now() };
+  return tree;
+}
+
+function invalidateTreeCache() { treeCache = null; }
 
 type Settings = { apiKey?: string };
 
@@ -40,21 +123,22 @@ async function writeSettings(settings: Settings): Promise<void> {
 
 const pendingAskClaude = new Set<string>();
 
-async function askClaude(filename: string): Promise<string> {
-  if (pendingAskClaude.has(filename)) {
+async function askClaude(relPath: string): Promise<string> {
+  if (pendingAskClaude.has(relPath)) {
     throw new Error("Already analyzing this file — please wait for the current request to finish.");
   }
-  pendingAskClaude.add(filename);
+  pendingAskClaude.add(relPath);
   const settings = await readSettings();
   if (!settings.apiKey) throw new Error("No API key configured");
 
-  const filePath = join(resolvedFolder, filename);
-  const ext = extname(filename).toLowerCase();
+  const { dir, base } = splitRelPath(relPath);
+  const filePath = safePath(relPath);
+  const ext = extname(base).toLowerCase();
   const isImage = IMAGE_EXTENSIONS.has(ext);
 
   // Build context from existing comments
-  const context = await readContext();
-  const fileCtx = context[filename];
+  const context = await readContext(dir);
+  const fileCtx = context[base];
   let existingContext = "";
   if (fileCtx?.comments?.length) {
     existingContext = "\n\nExisting comments on this file:\n" +
@@ -81,7 +165,7 @@ async function askClaude(filename: string): Promise<string> {
 
   content.push({
     type: "text",
-    text: `You are a technical analyst reviewing a file called "${filename}" that was captured during an in-person product/design session. The user has already provided voice annotations with their own context about what this file contains.${existingContext}
+    text: `You are a technical analyst reviewing a file called "${base}" that was captured during an in-person product/design session. The user has already provided voice annotations with their own context about what this file contains.${existingContext}
 
 ${isImage ? "Look at this image carefully. Read ALL handwritten text, labels, arrows, and diagram elements." : `This is a ${ext} file.`}
 
@@ -114,36 +198,37 @@ Your job is to ADD VALUE beyond what the user already said. Follow these rules s
 
   if (!res.ok) {
     const err = await res.text();
-    pendingAskClaude.delete(filename);
+    pendingAskClaude.delete(relPath);
     throw new Error(`Claude API error: ${res.status} ${err}`);
   }
 
   const data = await res.json() as any;
-  pendingAskClaude.delete(filename);
+  pendingAskClaude.delete(relPath);
   return data.content[0]?.text ?? "No response";
 }
 
 const pendingAutoAnnotate = new Set<string>();
 
-async function autoAnnotate(filename: string): Promise<{ region: Region; text: string }[]> {
-  if (pendingAutoAnnotate.has(filename)) {
+async function autoAnnotate(relPath: string): Promise<{ region: Region; text: string }[]> {
+  if (pendingAutoAnnotate.has(relPath)) {
     throw new Error("Already auto-annotating this file — please wait.");
   }
-  pendingAutoAnnotate.add(filename);
+  pendingAutoAnnotate.add(relPath);
   const settings = await readSettings();
   if (!settings.apiKey) throw new Error("No API key configured");
 
-  const filePath = join(resolvedFolder, filename);
-  const ext = extname(filename).toLowerCase();
+  const { dir, base } = splitRelPath(relPath);
+  const filePath = safePath(relPath);
+  const ext = extname(base).toLowerCase();
   const isImage = IMAGE_EXTENSIONS.has(ext);
   if (!isImage) {
-    pendingAutoAnnotate.delete(filename);
+    pendingAutoAnnotate.delete(relPath);
     throw new Error("Auto-annotate only works on images");
   }
 
   // Build context from existing comments
-  const context = await readContext();
-  const fileCtx = context[filename];
+  const context = await readContext(dir);
+  const fileCtx = context[base];
   let existingContext = "";
   if (fileCtx?.comments?.length) {
     existingContext = "\n\nExisting comments on this file (avoid duplicating these areas):\n" +
@@ -213,12 +298,12 @@ Content rules:
 
   if (!res.ok) {
     const err = await res.text();
-    pendingAutoAnnotate.delete(filename);
+    pendingAutoAnnotate.delete(relPath);
     throw new Error(`Claude API error: ${res.status} ${err}`);
   }
 
   const data = await res.json() as any;
-  pendingAutoAnnotate.delete(filename);
+  pendingAutoAnnotate.delete(relPath);
   const rawText = data.content[0]?.text ?? "";
 
   // Extract JSON array from response (Claude might wrap it in markdown code fences)
@@ -271,44 +356,45 @@ if (!existsSync(resolvedFolder)) {
 
 type Region = { x: number; y: number; w: number; h: number };
 type Comment = { author: "user" | "claude"; text: string; ts: string; audio?: string; region?: Region };
-type FileContext = { comments: Comment[]; status: "pending" | "annotated" | "skipped" };
+type FileContext = { comments: Comment[]; status: "pending" | "annotated" | "skipped"; hash?: string };
 type ContextData = Record<string, FileContext>;
 
-async function readContext(): Promise<ContextData> {
-  const contextPath = join(resolvedFolder, CONTEXT_FILE);
+async function readContext(subdir: string = ""): Promise<ContextData> {
+  const contextPath = join(resolvedFolder, subdir, CONTEXT_FILE);
   if (!existsSync(contextPath)) return {};
   const raw = await readFile(contextPath, "utf-8");
   return JSON.parse(raw);
 }
 
-async function writeContext(data: ContextData): Promise<void> {
-  const contextPath = join(resolvedFolder, CONTEXT_FILE);
+async function writeContext(data: ContextData, subdir: string = ""): Promise<void> {
+  const contextPath = join(resolvedFolder, subdir, CONTEXT_FILE);
   await writeFile(contextPath, JSON.stringify(data, null, 2), "utf-8");
+  invalidateTreeCache();
 }
 
-async function readSummary(): Promise<{ content: string | null; lastModified: string | null }> {
-  const summaryPath = join(resolvedFolder, SUMMARY_FILE);
+async function readSummary(subdir: string = ""): Promise<{ content: string | null; lastModified: string | null }> {
+  const summaryPath = join(resolvedFolder, subdir, SUMMARY_FILE);
   if (!existsSync(summaryPath)) return { content: null, lastModified: null };
   const raw = await readFile(summaryPath, "utf-8");
   const stats = await stat(summaryPath);
   return { content: raw, lastModified: stats.mtime.toISOString() };
 }
 
-async function writeSummary(content: string): Promise<void> {
-  const summaryPath = join(resolvedFolder, SUMMARY_FILE);
+async function writeSummary(content: string, subdir: string = ""): Promise<void> {
+  const summaryPath = join(resolvedFolder, subdir, SUMMARY_FILE);
   await writeFile(summaryPath, content, "utf-8");
 }
 
-async function ensureHistoryDir(): Promise<string> {
-  const historyDir = join(resolvedFolder, SUMMARY_HISTORY_DIR);
+async function ensureHistoryDir(subdir: string = ""): Promise<string> {
+  const historyDir = join(resolvedFolder, subdir, SUMMARY_HISTORY_DIR);
   if (!existsSync(historyDir)) {
     await mkdir(historyDir, { recursive: true });
   }
   return historyDir;
 }
 
-async function listVersions(): Promise<number[]> {
-  const historyDir = join(resolvedFolder, SUMMARY_HISTORY_DIR);
+async function listVersions(subdir: string = ""): Promise<number[]> {
+  const historyDir = join(resolvedFolder, subdir, SUMMARY_HISTORY_DIR);
   if (!existsSync(historyDir)) return [];
   const entries = await readdir(historyDir);
   const versions = entries
@@ -318,20 +404,20 @@ async function listVersions(): Promise<number[]> {
   return versions;
 }
 
-async function getNextVersion(): Promise<number> {
-  const versions = await listVersions();
+async function getNextVersion(subdir: string = ""): Promise<number> {
+  const versions = await listVersions(subdir);
   return versions.length === 0 ? 1 : Math.max(...versions) + 1;
 }
 
-async function saveVersion(content: string): Promise<number> {
-  const historyDir = await ensureHistoryDir();
-  const version = await getNextVersion();
+async function saveVersion(content: string, subdir: string = ""): Promise<number> {
+  const historyDir = await ensureHistoryDir(subdir);
+  const version = await getNextVersion(subdir);
   await writeFile(join(historyDir, `v${version}.md`), content, "utf-8");
   return version;
 }
 
-async function readVersion(version: number): Promise<{ content: string; version: number } | null> {
-  const filePath = join(resolvedFolder, SUMMARY_HISTORY_DIR, `v${version}.md`);
+async function readVersion(version: number, subdir: string = ""): Promise<{ content: string; version: number } | null> {
+  const filePath = join(resolvedFolder, subdir, SUMMARY_HISTORY_DIR, `v${version}.md`);
   if (!existsSync(filePath)) return null;
   const content = await readFile(filePath, "utf-8");
   return { content, version };
@@ -339,7 +425,25 @@ async function readVersion(version: number): Promise<{ content: string; version:
 
 let pendingGenerate = false;
 
-async function generateSummary(): Promise<{ content: string; version: number }> {
+// Recursively collect all contexts from a directory tree
+async function collectAllContexts(dir: string, relPath: string): Promise<{ dir: string; filename: string; fileCtx: FileContext }[]> {
+  const results: { dir: string; filename: string; fileCtx: FileContext }[] = [];
+  const context = await readContext(relPath);
+  for (const [filename, fileCtx] of Object.entries(context)) {
+    if (fileCtx.comments?.length) {
+      results.push({ dir: relPath, filename, fileCtx });
+    }
+  }
+  const entries = await readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith(".") || HIDDEN_DIRS.has(entry.name)) continue;
+    const childRel = relPath ? `${relPath}/${entry.name}` : entry.name;
+    results.push(...await collectAllContexts(join(dir, entry.name), childRel));
+  }
+  return results;
+}
+
+async function generateSummary(subdir: string = "", aggregate: boolean = false): Promise<{ content: string; version: number }> {
   if (pendingGenerate) throw new Error("Summary generation already in progress.");
   pendingGenerate = true;
 
@@ -347,20 +451,37 @@ async function generateSummary(): Promise<{ content: string; version: number }> 
     const settings = await readSettings();
     if (!settings.apiKey) throw new Error("No API key configured");
 
-    const context = await readContext();
-    const fileList = Object.entries(context);
-    if (fileList.length === 0) throw new Error("No annotations to summarize.");
-
     let annotationDump = "";
-    for (const [filename, fileCtx] of fileList) {
-      if (!fileCtx.comments || fileCtx.comments.length === 0) continue;
-      annotationDump += `\n## ${filename} (status: ${fileCtx.status})\n`;
-      for (let i = 0; i < fileCtx.comments.length; i++) {
-        const c = fileCtx.comments[i];
-        const regionNote = c.region
-          ? ` (region: ${Math.round(c.region.x)}%-${Math.round(c.region.x + c.region.w)}% x, ${Math.round(c.region.y)}%-${Math.round(c.region.y + c.region.h)}% y)`
-          : "";
-        annotationDump += `- [${c.author.toUpperCase()}, #${i}]${regionNote} ${c.text}\n`;
+
+    if (aggregate) {
+      const allContexts = await collectAllContexts(join(resolvedFolder, subdir), subdir);
+      if (allContexts.length === 0) throw new Error("No annotations to summarize.");
+      for (const { dir, filename, fileCtx } of allContexts) {
+        const displayName = dir ? `${dir}/${filename}` : filename;
+        annotationDump += `\n## ${displayName} (status: ${fileCtx.status})\n`;
+        for (let i = 0; i < fileCtx.comments.length; i++) {
+          const c = fileCtx.comments[i];
+          const regionNote = c.region
+            ? ` (region: ${Math.round(c.region.x)}%-${Math.round(c.region.x + c.region.w)}% x, ${Math.round(c.region.y)}%-${Math.round(c.region.y + c.region.h)}% y)`
+            : "";
+          annotationDump += `- [${c.author.toUpperCase()}, #${i}]${regionNote} ${c.text}\n`;
+        }
+      }
+    } else {
+      const context = await readContext(subdir);
+      const fileList = Object.entries(context);
+      if (fileList.length === 0) throw new Error("No annotations to summarize.");
+      for (const [filename, fileCtx] of fileList) {
+        if (!fileCtx.comments || fileCtx.comments.length === 0) continue;
+        const displayName = subdir ? `${subdir}/${filename}` : filename;
+        annotationDump += `\n## ${displayName} (status: ${fileCtx.status})\n`;
+        for (let i = 0; i < fileCtx.comments.length; i++) {
+          const c = fileCtx.comments[i];
+          const regionNote = c.region
+            ? ` (region: ${Math.round(c.region.x)}%-${Math.round(c.region.x + c.region.w)}% x, ${Math.round(c.region.y)}%-${Math.round(c.region.y + c.region.h)}% y)`
+            : "";
+          annotationDump += `- [${c.author.toUpperCase()}, #${i}]${regionNote} ${c.text}\n`;
+        }
       }
     }
 
@@ -387,10 +508,11 @@ RULES:
 9. If a CLAUDE comment introduced a UI element or design detail that the USER did not mention, flag it as "(AI-suggested, verify with team)" inline.
 10. Be specific. Reference the exact features, modules, metrics, and UI elements mentioned in the annotations. Do not invent screens that were not discussed.
 11. CITATIONS: When referencing a specific comment, use this exact markdown link format:
-   - To cite a comment: ["short verbatim quote"](comment:FILENAME:INDEX)
+   - To cite a comment: ["short verbatim quote"](comment:FILEPATH:INDEX)
      Example: ["vitality module tracks daily energy"](comment:IMG_5210.jpeg:0)
-   - To reference an image/file: [FILENAME](image:FILENAME)
+   - To reference an image/file: [FILENAME](image:FILEPATH)
      Example: [IMG_5210.jpeg](image:IMG_5210.jpeg)
+   - FILEPATH is the relative path as shown in the annotations (e.g. "subdir/IMG_5210.jpeg" or just "IMG_5210.jpeg").
    - Quoted phrases must be 5-15 words extracted VERBATIM from the comment text.
    - INDEX must match the #N shown next to the comment author tag (e.g. [USER, #0] means index 0).
    - Use image references when discussing a specific file's content.
@@ -422,25 +544,40 @@ ${annotationDump}`;
 
     const data = (await res.json()) as any;
     const content = data.content[0]?.text ?? "No response";
-    await writeSummary(content);
-    const version = await saveVersion(content);
+    await writeSummary(content, subdir);
+    const version = await saveVersion(content, subdir);
     return { content, version };
   } finally {
     pendingGenerate = false;
   }
 }
 
-async function listFiles(): Promise<string[]> {
-  const entries = await readdir(resolvedFolder);
-  return entries
-    .filter((name) => {
-      if (name.startsWith(".")) return false;
-      if (name === CONTEXT_FILE) return false;
-      if (name === SUMMARY_FILE) return false;
-      const ext = extname(name).toLowerCase();
-      return ALLOWED_EXTENSIONS.has(ext);
-    })
-    .sort();
+type DirListing = {
+  files: string[];
+  directories: string[];
+};
+
+async function listFiles(subdir: string = ""): Promise<DirListing> {
+  const dirPath = join(resolvedFolder, subdir);
+  if (!existsSync(dirPath)) return { files: [], directories: [] };
+  const entries = await readdir(dirPath, { withFileTypes: true });
+  const files: string[] = [];
+  const directories: string[] = [];
+
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) continue;
+    if (entry.name === CONTEXT_FILE || entry.name === SUMMARY_FILE) continue;
+    if (HIDDEN_DIRS.has(entry.name)) continue;
+
+    if (entry.isDirectory()) {
+      directories.push(entry.name);
+    } else {
+      const ext = extname(entry.name).toLowerCase();
+      if (ALLOWED_EXTENSIONS.has(ext)) files.push(entry.name);
+    }
+  }
+
+  return { files: files.sort(), directories: directories.sort() };
 }
 
 function json(data: unknown, status = 200): Response {
@@ -450,12 +587,91 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
+// ── Orphan detection + reconcile ──
+
+async function findOrphans(subdir: string = ""): Promise<{ filename: string; entry: FileContext }[]> {
+  const context = await readContext(subdir);
+  const dirPath = join(resolvedFolder, subdir);
+  const orphans: { filename: string; entry: FileContext }[] = [];
+  for (const [filename, entry] of Object.entries(context)) {
+    if (!existsSync(join(dirPath, filename))) {
+      orphans.push({ filename, entry });
+    }
+  }
+  return orphans;
+}
+
+async function reconcileAll(): Promise<{ migrated: { from: string; to: string; filename: string }[]; stillOrphaned: number }> {
+  // 1. Collect all orphans with hashes
+  const orphansByHash = new Map<string, { subdir: string; filename: string; entry: FileContext }>();
+  async function collectOrphans(dir: string, relPath: string) {
+    const context = await readContext(relPath);
+    const dirPath = join(resolvedFolder, relPath);
+    for (const [filename, entry] of Object.entries(context)) {
+      if (!existsSync(join(dirPath, filename)) && entry.hash) {
+        orphansByHash.set(entry.hash, { subdir: relPath, filename, entry });
+      }
+    }
+    const entries = await readdir(dir, { withFileTypes: true });
+    for (const e of entries) {
+      if (!e.isDirectory() || e.name.startsWith(".") || HIDDEN_DIRS.has(e.name)) continue;
+      const childRel = relPath ? `${relPath}/${e.name}` : e.name;
+      await collectOrphans(join(dir, e.name), childRel);
+    }
+  }
+  await collectOrphans(resolvedFolder, "");
+
+  if (orphansByHash.size === 0) return { migrated: [], stillOrphaned: 0 };
+
+  // 2. Scan all files, compute hashes for unannotated ones, try to match
+  const migrated: { from: string; to: string; filename: string }[] = [];
+  async function scanFiles(dir: string, relPath: string) {
+    const entries = await readdir(dir, { withFileTypes: true });
+    for (const e of entries) {
+      if (e.name.startsWith(".") || HIDDEN_DIRS.has(e.name)) continue;
+      if (e.isDirectory()) {
+        const childRel = relPath ? `${relPath}/${e.name}` : e.name;
+        await scanFiles(join(dir, e.name), childRel);
+        continue;
+      }
+      const ext = extname(e.name).toLowerCase();
+      if (!ALLOWED_EXTENSIONS.has(ext)) continue;
+      // Check if this file already has annotations
+      const ctx = await readContext(relPath);
+      if (ctx[e.name]?.comments?.length) continue;
+      // Compute hash and check for match
+      const hash = await computeFileHash(join(dir, e.name));
+      const orphan = orphansByHash.get(hash);
+      if (orphan) {
+        // Migrate: remove from old context, add to new context
+        const oldContext = await readContext(orphan.subdir);
+        delete oldContext[orphan.filename];
+        await writeContext(oldContext, orphan.subdir);
+
+        const newContext = await readContext(relPath);
+        newContext[e.name] = { ...orphan.entry, hash };
+        await writeContext(newContext, relPath);
+
+        const fromPath = orphan.subdir ? `${orphan.subdir}/${orphan.filename}` : orphan.filename;
+        const toPath = relPath ? `${relPath}/${e.name}` : e.name;
+        migrated.push({ from: fromPath, to: toPath, filename: e.name });
+        orphansByHash.delete(hash);
+      }
+    }
+  }
+  await scanFiles(resolvedFolder, "");
+
+  invalidateTreeCache();
+  return { migrated, stillOrphaned: orphansByHash.size };
+}
+
 const server = Bun.serve({
   port: PORT,
   idleTimeout: 120, // Claude API calls with large images can take a while
   async fetch(req) {
     const url = new URL(req.url);
     const path = url.pathname;
+    const dirParam = url.searchParams.get("dir") ?? "";
 
     // Static files
     if (path === "/" || path === "/index.html") {
@@ -480,24 +696,52 @@ const server = Bun.serve({
       return json({ ok: true });
     }
 
+    // API: directory tree
+    if (path === "/api/tree" && req.method === "GET") {
+      const tree = await getTree();
+      return json(tree);
+    }
+
+    // API: orphans for a directory
+    if (path === "/api/orphans" && req.method === "GET") {
+      try {
+        if (dirParam) safePath(dirParam);
+        const orphans = await findOrphans(dirParam);
+        return json({ orphans, count: orphans.length });
+      } catch (e: any) {
+        return json({ error: e.message }, 400);
+      }
+    }
+
+    // API: reconcile moved files
+    if (path === "/api/reconcile" && req.method === "POST") {
+      try {
+        const result = await reconcileAll();
+        return json(result);
+      } catch (e: any) {
+        return json({ error: e.message }, 500);
+      }
+    }
+
     // API: ask Claude to analyze a file
     const askMatch = path.match(/^\/api\/files\/(.+)\/ask-claude$/);
     if (askMatch && req.method === "POST") {
-      const filename = decodeURIComponent(askMatch[1]);
+      const relPath = decodeURIComponent(askMatch[1]);
+      const { dir, base } = splitRelPath(relPath);
       try {
-        const analysis = await askClaude(filename);
-        // Save as a claude comment
-        const context = await readContext();
-        if (!context[filename]) {
-          context[filename] = { comments: [], status: "pending" };
+        safePath(relPath);
+        const analysis = await askClaude(relPath);
+        const context = await readContext(dir);
+        if (!context[base]) {
+          context[base] = { comments: [], status: "pending" };
         }
-        context[filename].comments.push({
+        context[base].comments.push({
           author: "claude",
           text: analysis,
           ts: new Date().toISOString(),
         });
-        context[filename].status = "annotated";
-        await writeContext(context);
+        context[base].status = "annotated";
+        await writeContext(context, dir);
         return json({ ok: true, text: analysis });
       } catch (e: any) {
         return json({ error: e.message }, 500);
@@ -507,68 +751,107 @@ const server = Bun.serve({
     // API: auto-annotate — Claude identifies regions and creates annotated comments
     const autoAnnotateMatch = path.match(/^\/api\/files\/(.+)\/auto-annotate$/);
     if (autoAnnotateMatch && req.method === "POST") {
-      const filename = decodeURIComponent(autoAnnotateMatch[1]);
+      const relPath = decodeURIComponent(autoAnnotateMatch[1]);
+      const { dir, base } = splitRelPath(relPath);
       try {
-        const annotations = await autoAnnotate(filename);
-        const context = await readContext();
-        if (!context[filename]) {
-          context[filename] = { comments: [], status: "pending" };
+        safePath(relPath);
+        const annotations = await autoAnnotate(relPath);
+        const context = await readContext(dir);
+        if (!context[base]) {
+          context[base] = { comments: [], status: "pending" };
         }
         const ts = new Date().toISOString();
         for (const ann of annotations) {
-          context[filename].comments.push({
+          context[base].comments.push({
             author: "claude",
             text: ann.text,
             ts,
             region: ann.region,
           });
         }
-        context[filename].status = "annotated";
-        await writeContext(context);
+        context[base].status = "annotated";
+        await writeContext(context, dir);
         return json({ ok: true, count: annotations.length });
       } catch (e: any) {
         return json({ error: e.message }, 500);
       }
     }
 
-    // API: list files with context
+    // API: list files with context (supports ?dir= for subdirectory)
     if (path === "/api/files" && req.method === "GET") {
-      const files = await listFiles();
-      const context = await readContext();
-      const result = files.map((name) => ({
-        name,
-        ext: extname(name).toLowerCase(),
-        status: context[name]?.status ?? "pending",
-        commentCount: context[name]?.comments?.length ?? 0,
-        comments: context[name]?.comments ?? [],
-      }));
-      return json(result);
+      try {
+        if (dirParam) safePath(dirParam);
+        const { files: fileNames, directories } = await listFiles(dirParam);
+        const context = await readContext(dirParam);
+
+        // Backfill hashes for annotated files that don't have one yet
+        let contextModified = false;
+        for (const name of fileNames) {
+          if (context[name]?.comments?.length && !context[name].hash) {
+            try {
+              context[name].hash = await computeFileHash(join(resolvedFolder, dirParam, name));
+              contextModified = true;
+            } catch {}
+          }
+        }
+        if (contextModified) await writeContext(context, dirParam);
+
+        // Build directory entries with annotation counts
+        const dirEntries = [];
+        for (const dirName of directories) {
+          const subPath = dirParam ? `${dirParam}/${dirName}` : dirName;
+          const subCtx = await readContext(subPath);
+          const fileCount = (await listFiles(subPath)).files.length;
+          const annotatedCount = Object.values(subCtx).filter(f => f.status === "annotated").length;
+          dirEntries.push({
+            type: "directory" as const,
+            name: dirName,
+            path: subPath,
+            fileCount,
+            annotatedCount,
+          });
+        }
+
+        const fileEntries = fileNames.map((name) => ({
+          type: "file" as const,
+          name,
+          path: dirParam ? `${dirParam}/${name}` : name,
+          dir: dirParam,
+          ext: extname(name).toLowerCase(),
+          status: context[name]?.status ?? "pending",
+          commentCount: context[name]?.comments?.length ?? 0,
+          comments: context[name]?.comments ?? [],
+        }));
+
+        return json([...dirEntries, ...fileEntries]);
+      } catch (e: any) {
+        return json({ error: e.message }, 400);
+      }
     }
 
     // API: file thumbnail (resized for grid view)
     const thumbMatch = path.match(/^\/api\/files\/(.+)\/thumb$/);
     if (thumbMatch && req.method === "GET") {
-      const filename = decodeURIComponent(thumbMatch[1]);
-      const filePath = join(resolvedFolder, filename);
+      const relPath = decodeURIComponent(thumbMatch[1]);
+      const { dir, base } = splitRelPath(relPath);
+      let filePath: string;
+      try { filePath = safePath(relPath); } catch { return json({ error: "Invalid path" }, 400); }
       if (!existsSync(filePath)) return json({ error: "Not found" }, 404);
-      const ext = extname(filename).toLowerCase();
+      const ext = extname(base).toLowerCase();
       const imageExts = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif"]);
       if (!imageExts.has(ext)) {
-        // Non-image files: fall through to full preview
         const mime = MIME_TYPES[ext] ?? "application/octet-stream";
         return new Response(Bun.file(filePath), { headers: { "Content-Type": mime } });
       }
-      const thumbDir = join(resolvedFolder, ".thumbs");
+      const thumbDir = join(resolvedFolder, dir, ".thumbs");
       if (!existsSync(thumbDir)) await mkdir(thumbDir, { recursive: true });
-      const thumbPath = join(thumbDir, `${basename(filename, ext)}.jpg`);
+      const thumbPath = join(thumbDir, `${basename(base, ext)}.jpg`);
       if (!existsSync(thumbPath)) {
-        // Generate thumbnail using macOS sips
         const proc = Bun.spawnSync([
           "sips", "-s", "format", "jpeg", "-s", "formatOptions", "70",
           "-Z", "400", filePath, "--out", thumbPath,
         ]);
         if (proc.exitCode !== 0) {
-          // Fallback to original
           const mime = MIME_TYPES[ext] ?? "application/octet-stream";
           return new Response(Bun.file(filePath), { headers: { "Content-Type": mime } });
         }
@@ -581,10 +864,11 @@ const server = Bun.serve({
     // API: file preview
     const previewMatch = path.match(/^\/api\/files\/(.+)\/preview$/);
     if (previewMatch && req.method === "GET") {
-      const filename = decodeURIComponent(previewMatch[1]);
-      const filePath = join(resolvedFolder, filename);
+      const relPath = decodeURIComponent(previewMatch[1]);
+      let filePath: string;
+      try { filePath = safePath(relPath); } catch { return json({ error: "Invalid path" }, 400); }
       if (!existsSync(filePath)) return json({ error: "Not found" }, 404);
-      const ext = extname(filename).toLowerCase();
+      const ext = extname(relPath).toLowerCase();
       const mime = MIME_TYPES[ext] ?? "application/octet-stream";
       const file = Bun.file(filePath);
       return new Response(file, {
@@ -598,21 +882,25 @@ const server = Bun.serve({
     // API: upload audio for a file
     const audioMatch = path.match(/^\/api\/files\/(.+)\/audio$/);
     if (audioMatch && req.method === "POST") {
-      const filename = decodeURIComponent(audioMatch[1]);
+      const relPath = decodeURIComponent(audioMatch[1]);
+      const { dir, base } = splitRelPath(relPath);
+      try { safePath(relPath); } catch { return json({ error: "Invalid path" }, 400); }
       const blob = await req.blob();
       const ext = blob.type.includes("webm") ? "webm" : blob.type.includes("mp4") ? "m4a" : "ogg";
       const ts = Date.now();
-      const audioFilename = `.audio_${basename(filename, extname(filename))}_${ts}.${ext}`;
-      const audioPath = join(resolvedFolder, audioFilename);
+      const audioBaseName = `.audio_${basename(base, extname(base))}_${ts}.${ext}`;
+      const audioRelPath = dir ? `${dir}/${audioBaseName}` : audioBaseName;
+      const audioPath = join(resolvedFolder, audioRelPath);
       await writeFile(audioPath, Buffer.from(await blob.arrayBuffer()));
-      return json({ audioFilename });
+      return json({ audioFilename: audioRelPath });
     }
 
-    // API: serve audio file
+    // API: serve audio file (relative path from root)
     const audioServeMatch = path.match(/^\/api\/audio\/(.+)$/);
     if (audioServeMatch && req.method === "GET") {
-      const audioFilename = decodeURIComponent(audioServeMatch[1]);
-      const audioPath = join(resolvedFolder, audioFilename);
+      const audioRelPath = decodeURIComponent(audioServeMatch[1]);
+      let audioPath: string;
+      try { audioPath = safePath(audioRelPath); } catch { return json({ error: "Invalid path" }, 400); }
       if (!existsSync(audioPath)) return json({ error: "Not found" }, 404);
       const file = Bun.file(audioPath);
       return new Response(file, { headers: { "Content-Type": "audio/webm" } });
@@ -621,13 +909,21 @@ const server = Bun.serve({
     // API: add comment
     const commentMatch = path.match(/^\/api\/files\/(.+)\/comments$/);
     if (commentMatch && req.method === "POST") {
-      const filename = decodeURIComponent(commentMatch[1]);
+      const relPath = decodeURIComponent(commentMatch[1]);
+      const { dir, base } = splitRelPath(relPath);
+      try { safePath(relPath); } catch { return json({ error: "Invalid path" }, 400); }
       const body = (await req.json()) as { author: string; text: string; audio?: string; region?: Region };
       if (!body.text?.trim()) return json({ error: "Empty comment" }, 400);
 
-      const context = await readContext();
-      if (!context[filename]) {
-        context[filename] = { comments: [], status: "pending" };
+      const context = await readContext(dir);
+      if (!context[base]) {
+        context[base] = { comments: [], status: "pending" };
+      }
+      // Compute hash on first annotation if missing
+      if (!context[base].hash) {
+        try {
+          context[base].hash = await computeFileHash(join(resolvedFolder, relPath));
+        } catch {}
       }
       const comment: Comment = {
         author: (body.author === "claude" ? "claude" : "user") as "user" | "claude",
@@ -636,82 +932,92 @@ const server = Bun.serve({
       };
       if (body.audio) comment.audio = body.audio;
       if (body.region) comment.region = body.region;
-      context[filename].comments.push(comment);
-      context[filename].status = "annotated";
-      await writeContext(context);
-      return json(context[filename]);
+      context[base].comments.push(comment);
+      context[base].status = "annotated";
+      await writeContext(context, dir);
+      return json(context[base]);
     }
 
     // API: update status
     const statusMatch = path.match(/^\/api\/files\/(.+)\/status$/);
     if (statusMatch && req.method === "PATCH") {
-      const filename = decodeURIComponent(statusMatch[1]);
+      const relPath = decodeURIComponent(statusMatch[1]);
+      const { dir, base } = splitRelPath(relPath);
+      try { safePath(relPath); } catch { return json({ error: "Invalid path" }, 400); }
       const body = (await req.json()) as { status: string };
       const validStatuses = ["pending", "annotated", "skipped"];
       if (!validStatuses.includes(body.status)) return json({ error: "Invalid status" }, 400);
 
-      const context = await readContext();
-      if (!context[filename]) {
-        context[filename] = { comments: [], status: "pending" };
+      const context = await readContext(dir);
+      if (!context[base]) {
+        context[base] = { comments: [], status: "pending" };
       }
-      context[filename].status = body.status as FileContext["status"];
-      await writeContext(context);
-      return json(context[filename]);
+      context[base].status = body.status as FileContext["status"];
+      await writeContext(context, dir);
+      return json(context[base]);
     }
 
     // API: delete comment
     const deleteCommentMatch = path.match(/^\/api\/files\/(.+)\/comments\/(\d+)$/);
     if (deleteCommentMatch && req.method === "DELETE") {
-      const filename = decodeURIComponent(deleteCommentMatch[1]);
+      const relPath = decodeURIComponent(deleteCommentMatch[1]);
+      const { dir, base } = splitRelPath(relPath);
+      try { safePath(relPath); } catch { return json({ error: "Invalid path" }, 400); }
       const index = parseInt(deleteCommentMatch[2], 10);
-      const context = await readContext();
-      if (!context[filename]) return json({ error: "Not found" }, 404);
-      if (index < 0 || index >= context[filename].comments.length) return json({ error: "Invalid index" }, 400);
-      context[filename].comments.splice(index, 1);
-      if (context[filename].comments.length === 0) {
-        context[filename].status = "pending";
+      const context = await readContext(dir);
+      if (!context[base]) return json({ error: "Not found" }, 404);
+      if (index < 0 || index >= context[base].comments.length) return json({ error: "Invalid index" }, 400);
+      context[base].comments.splice(index, 1);
+      if (context[base].comments.length === 0) {
+        context[base].status = "pending";
       }
-      await writeContext(context);
-      return json(context[filename]);
+      await writeContext(context, dir);
+      return json(context[base]);
     }
 
     // API: update a comment's region
     const regionMatch = path.match(/^\/api\/files\/(.+)\/comments\/(\d+)\/region$/);
     if (regionMatch && req.method === "PUT") {
-      const filename = decodeURIComponent(regionMatch[1]);
+      const relPath = decodeURIComponent(regionMatch[1]);
+      const { dir, base } = splitRelPath(relPath);
+      try { safePath(relPath); } catch { return json({ error: "Invalid path" }, 400); }
       const index = parseInt(regionMatch[2], 10);
       const body = (await req.json()) as { region: Region };
-      const context = await readContext();
-      if (!context[filename]) return json({ error: "Not found" }, 404);
-      if (index < 0 || index >= context[filename].comments.length) return json({ error: "Invalid index" }, 400);
-      context[filename].comments[index].region = body.region;
-      await writeContext(context);
+      const context = await readContext(dir);
+      if (!context[base]) return json({ error: "Not found" }, 404);
+      if (index < 0 || index >= context[base].comments.length) return json({ error: "Invalid index" }, 400);
+      context[base].comments[index].region = body.region;
+      await writeContext(context, dir);
       return json({ ok: true });
     }
 
     // API: update comment text
     const textMatch = path.match(/^\/api\/files\/(.+)\/comments\/(\d+)\/text$/);
     if (textMatch && req.method === "PUT") {
-      const filename = decodeURIComponent(textMatch[1]);
+      const relPath = decodeURIComponent(textMatch[1]);
+      const { dir, base } = splitRelPath(relPath);
+      try { safePath(relPath); } catch { return json({ error: "Invalid path" }, 400); }
       const index = parseInt(textMatch[2], 10);
       const body = (await req.json()) as { text: string };
-      const context = await readContext();
-      if (!context[filename]) return json({ error: "Not found" }, 404);
-      if (index < 0 || index >= context[filename].comments.length) return json({ error: "Invalid index" }, 400);
-      context[filename].comments[index].text = body.text;
-      await writeContext(context);
+      const context = await readContext(dir);
+      if (!context[base]) return json({ error: "Not found" }, 404);
+      if (index < 0 || index >= context[base].comments.length) return json({ error: "Invalid index" }, 400);
+      context[base].comments[index].text = body.text;
+      await writeContext(context, dir);
       return json({ ok: true });
     }
 
     // API: fix comment formatting with Claude
     const fixMatch = path.match(/^\/api\/files\/(.+)\/comments\/(\d+)\/fix$/);
     if (fixMatch && req.method === "POST") {
-      const filename = decodeURIComponent(fixMatch[1]);
+      const relPath = decodeURIComponent(fixMatch[1]);
+      const { dir, base } = splitRelPath(relPath);
+      try { safePath(relPath); } catch { return json({ error: "Invalid path" }, 400); }
       const index = parseInt(fixMatch[2], 10);
-      const context = await readContext();
-      if (!context[filename]) return json({ error: "Not found" }, 404);
-      if (index < 0 || index >= context[filename].comments.length) return json({ error: "Invalid index" }, 400);
-      const comment = context[filename].comments[index];
+      const context = await readContext(dir);
+      if (!context[base]) return json({ error: "Not found" }, 404);
+      if (index < 0 || index >= context[base].comments.length) return json({ error: "Invalid index" }, 400);
+      const comment = context[base].comments[index];
       const settings = await readSettings();
       if (!settings.apiKey) return json({ error: "No API key" }, 400);
 
@@ -735,8 +1041,8 @@ const server = Bun.serve({
         const data = await response.json() as any;
         const fixedText = data.content?.[0]?.text?.trim();
         if (fixedText) {
-          context[filename].comments[index].text = fixedText;
-          await writeContext(context);
+          context[base].comments[index].text = fixedText;
+          await writeContext(context, dir);
           return json({ ok: true, text: fixedText });
         }
         return json({ error: "No response from Claude" }, 500);
@@ -745,44 +1051,66 @@ const server = Bun.serve({
       }
     }
 
-    // API: get summary
+    // API: get summary (supports ?dir=)
     if (path === "/api/summary" && req.method === "GET") {
-      const summary = await readSummary();
-      return json(summary);
+      try {
+        if (dirParam) safePath(dirParam);
+        const summary = await readSummary(dirParam);
+        return json(summary);
+      } catch (e: any) {
+        return json({ error: e.message }, 400);
+      }
     }
 
-    // API: save summary (manual edit)
+    // API: save summary (manual edit, supports ?dir=)
     if (path === "/api/summary" && req.method === "POST") {
-      const body = (await req.json()) as { content: string };
-      await writeSummary(body.content);
-      return json({ ok: true });
+      try {
+        if (dirParam) safePath(dirParam);
+        const body = (await req.json()) as { content: string };
+        await writeSummary(body.content, dirParam);
+        return json({ ok: true });
+      } catch (e: any) {
+        return json({ error: e.message }, 400);
+      }
     }
 
-    // API: generate summary
+    // API: generate summary (supports ?dir= and ?aggregate=true)
     if (path === "/api/summary/generate" && req.method === "POST") {
       try {
-        const { content, version } = await generateSummary();
-        const versions = await listVersions();
+        if (dirParam) safePath(dirParam);
+        const aggregate = url.searchParams.get("aggregate") === "true";
+        const { content, version } = await generateSummary(dirParam, aggregate);
+        const versions = await listVersions(dirParam);
         return json({ ok: true, content, version, totalVersions: versions.length });
       } catch (e: any) {
         return json({ error: e.message }, 500);
       }
     }
 
-    // API: list summary versions
+    // API: list summary versions (supports ?dir=)
     if (path === "/api/summary/versions" && req.method === "GET") {
-      const versions = await listVersions();
-      return json({ versions, total: versions.length });
+      try {
+        if (dirParam) safePath(dirParam);
+        const versions = await listVersions(dirParam);
+        return json({ versions, total: versions.length });
+      } catch (e: any) {
+        return json({ error: e.message }, 400);
+      }
     }
 
-    // API: get specific summary version
+    // API: get specific summary version (supports ?dir=)
     const versionMatch = path.match(/^\/api\/summary\/versions\/(\d+)$/);
     if (versionMatch && req.method === "GET") {
-      const versionNum = parseInt(versionMatch[1], 10);
-      const result = await readVersion(versionNum);
-      if (!result) return json({ error: "Version not found" }, 404);
-      const versions = await listVersions();
-      return json({ content: result.content, version: result.version, totalVersions: versions.length });
+      try {
+        if (dirParam) safePath(dirParam);
+        const versionNum = parseInt(versionMatch[1], 10);
+        const result = await readVersion(versionNum, dirParam);
+        if (!result) return json({ error: "Version not found" }, 404);
+        const versions = await listVersions(dirParam);
+        return json({ content: result.content, version: result.version, totalVersions: versions.length });
+      } catch (e: any) {
+        return json({ error: e.message }, 400);
+      }
     }
 
     return new Response("Not Found", { status: 404 });

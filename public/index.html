@@ -90,6 +90,63 @@
   }
   .btn-ghost:hover { background: var(--surface-2); color: var(--text); }
 
+  /* ── Breadcrumb Bar ── */
+  .breadcrumb-bar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 20px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    min-height: 32px;
+  }
+  .breadcrumb-item {
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: color 0.15s, background 0.15s;
+    white-space: nowrap;
+  }
+  .breadcrumb-item:hover { color: var(--text); background: var(--surface-2); }
+  .breadcrumb-item.current { color: var(--text); cursor: default; }
+  .breadcrumb-item.current:hover { background: transparent; }
+  .breadcrumb-sep { color: var(--border); user-select: none; font-size: 11px; }
+  .orphan-banner {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 20px;
+    background: rgba(234, 179, 8, 0.1);
+    border-bottom: 1px solid rgba(234, 179, 8, 0.2);
+    font-size: 12px;
+    color: var(--yellow);
+  }
+  .orphan-banner.active { display: flex; }
+  .orphan-banner button {
+    padding: 2px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--yellow);
+    background: transparent;
+    color: var(--yellow);
+    font-size: 11px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .orphan-banner button:hover { background: rgba(234, 179, 8, 0.15); }
+
+  /* ── Folder Grid Items ── */
+  .grid-item.folder {
+    border-style: dashed;
+  }
+  .grid-item.folder .grid-thumb-placeholder {
+    font-size: 36px;
+  }
+  .grid-item.folder .grid-meta {
+    color: var(--text-muted);
+  }
+
   /* ── Overview Grid ── */
   .overview {
     padding: 20px;
@@ -100,7 +157,22 @@
     display: flex;
     gap: 8px;
     margin-bottom: 16px;
+    align-items: center;
   }
+  .search-input {
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    font-family: inherit;
+    width: 160px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .search-input:focus { border-color: var(--accent); }
+  .search-input::placeholder { color: var(--text-muted); }
   .filter-btn {
     padding: 4px 12px;
     border-radius: 20px;
@@ -716,7 +788,7 @@
   /* ── Summary Siderail ── */
   .overview-container {
     display: flex;
-    height: calc(100vh - 56px);
+    height: calc(100vh - 56px - 32px);
   }
   .overview-container .overview {
     flex: 1;
@@ -732,7 +804,7 @@
     border-left: 1px solid var(--border);
     display: none;
     flex-direction: column;
-    height: calc(100vh - 56px);
+    height: calc(100vh - 56px - 32px);
   }
   .summary-siderail.active { display: flex; }
   .summary-header {
@@ -897,10 +969,22 @@
   </div>
 </div>
 
+<!-- Breadcrumb Bar -->
+<div class="breadcrumb-bar" id="breadcrumb-bar">
+  <span class="breadcrumb-item current" onclick="navigateToDir('')">Root</span>
+</div>
+
+<!-- Orphan notification banner -->
+<div class="orphan-banner" id="orphan-banner">
+  <span id="orphan-text"></span>
+  <button id="btn-reconcile" onclick="reconcileFiles()">Reconcile</button>
+</div>
+
 <!-- Overview + Summary Siderail Container -->
 <div class="overview-container" id="overview-container">
   <div class="overview" id="overview">
     <div class="filter-bar">
+      <input type="text" class="search-input" id="search-input" placeholder="Search comments…">
       <button class="filter-btn active" data-filter="all">All</button>
       <button class="filter-btn" data-filter="pending">Pending</button>
       <button class="filter-btn" data-filter="annotated">Annotated</button>
@@ -925,6 +1009,7 @@
         <span class="version-label" id="version-label">v1 of 1</span>
         <button class="btn btn-ghost version-btn" id="btn-version-next" title="Next version">&rsaquo;</button>
       </div>
+      <button class="btn btn-ghost" id="btn-generate-aggregate" style="display:none;padding:4px 10px;font-size:12px">Generate All</button>
       <button class="btn btn-primary" id="btn-generate-summary">Generate</button>
     </div>
   </div>
@@ -1011,7 +1096,10 @@ const FILE_ICONS = {
 let files = [];
 let currentIndex = 0;
 let activeFilter = 'all';
+let searchQuery = '';
 let galleryMode = false;
+let currentDir = '';
+let orphanCount = 0;
 
 // ── API helpers ──
 async function api(path, opts = {}) {
@@ -1029,35 +1117,142 @@ async function loadConfig() {
 }
 
 async function loadFiles() {
-  files = await api('/api/files');
+  const dirParam = currentDir ? `?dir=${encodeURIComponent(currentDir)}` : '';
+  const allEntries = await api(`/api/files${dirParam}`);
+  files = allEntries;
   updateProgress();
   renderGrid();
+  renderBreadcrumbs();
+  checkOrphans();
+}
+
+function navigateToDir(dir) {
+  currentDir = dir;
+  location.hash = dir ? encodeURIComponent(dir) : '';
+  loadFiles();
+  // Reset summary state for new directory
+  summaryRawContent = '';
+  summaryLastModified = null;
+  summaryCurrentVersion = null;
+  summaryTotalVersions = 0;
+  if (summaryVisible) {
+    loadSummary();
+    loadVersionList();
+  }
+}
+
+function renderBreadcrumbs() {
+  const bar = document.getElementById('breadcrumb-bar');
+  if (!currentDir) {
+    bar.innerHTML = '<span class="breadcrumb-item current">Root</span>';
+    return;
+  }
+  const parts = currentDir.split('/');
+  let html = '<span class="breadcrumb-item" onclick="navigateToDir(\'\')">Root</span>';
+  let accumulated = '';
+  parts.forEach((part, i) => {
+    accumulated = accumulated ? accumulated + '/' + part : part;
+    const isLast = i === parts.length - 1;
+    html += `<span class="breadcrumb-sep">/</span>`;
+    if (isLast) {
+      html += `<span class="breadcrumb-item current">${escapeHtml(part)}</span>`;
+    } else {
+      const dir = accumulated;
+      html += `<span class="breadcrumb-item" onclick="navigateToDir('${escapeAttr(dir)}')">${escapeHtml(part)}</span>`;
+    }
+  });
+  bar.innerHTML = html;
+}
+
+async function checkOrphans() {
+  try {
+    const dirParam = currentDir ? `?dir=${encodeURIComponent(currentDir)}` : '';
+    const res = await api(`/api/orphans${dirParam}`);
+    orphanCount = res.count || 0;
+    const banner = document.getElementById('orphan-banner');
+    if (orphanCount > 0) {
+      document.getElementById('orphan-text').textContent = `${orphanCount} annotation${orphanCount > 1 ? 's' : ''} don't match any file in this folder.`;
+      banner.classList.add('active');
+    } else {
+      banner.classList.remove('active');
+    }
+  } catch {}
+}
+
+async function reconcileFiles() {
+  const btn = document.getElementById('btn-reconcile');
+  btn.disabled = true;
+  btn.textContent = 'Reconciling...';
+  try {
+    const res = await api('/api/reconcile', { method: 'POST' });
+    if (res.migrated?.length > 0) {
+      alert(`Migrated ${res.migrated.length} annotation(s). ${res.stillOrphaned} still orphaned.`);
+    } else {
+      alert(`No matches found. ${res.stillOrphaned} orphaned annotation(s) remain.`);
+    }
+    loadFiles();
+  } catch (e) {
+    alert('Reconcile failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Reconcile';
+  }
+}
+
+function onlyFiles() {
+  return files.filter(f => f.type === 'file');
+}
+
+function onlyDirs() {
+  return files.filter(f => f.type === 'directory');
 }
 
 function filteredFiles() {
-  if (activeFilter === 'all') return files;
-  return files.filter(f => f.status === activeFilter);
+  let result = onlyFiles();
+  if (activeFilter !== 'all') result = result.filter(f => f.status === activeFilter);
+  if (searchQuery) {
+    const q = searchQuery.toLowerCase();
+    result = result.filter(f =>
+      f.name.toLowerCase().includes(q) ||
+      (f.comments || []).some(c => c.text.toLowerCase().includes(q))
+    );
+  }
+  return result;
 }
 
 function updateProgress() {
-  const annotated = files.filter(f => f.status === 'annotated').length;
-  document.getElementById('progress-text').textContent = `${annotated}/${files.length} annotated`;
+  const fileItems = onlyFiles();
+  const annotated = fileItems.filter(f => f.status === 'annotated').length;
+  document.getElementById('progress-text').textContent = `${annotated}/${fileItems.length} annotated`;
 }
 
 // ── Grid View ──
 function renderGrid() {
   const grid = document.getElementById('grid');
+  const dirs = onlyDirs();
   const visible = filteredFiles();
-  grid.innerHTML = visible.map((file, i) => {
+
+  // Render directories first
+  const dirHtml = dirs.map(d => `
+    <div class="grid-item folder" onclick="navigateToDir('${escapeAttr(d.path)}')">
+      <div class="grid-thumb-placeholder">\u{1F4C1}</div>
+      <div class="grid-info">
+        <div class="grid-name">${escapeHtml(d.name)}</div>
+        <div class="grid-meta">${d.fileCount} file${d.fileCount !== 1 ? 's' : ''}${d.annotatedCount ? ` \u00B7 ${d.annotatedCount} annotated` : ''}</div>
+      </div>
+    </div>
+  `).join('');
+
+  const fileHtml = visible.map((file, i) => {
     const isImage = IMAGE_EXTS.includes(file.ext);
     const thumb = isImage
-      ? `<img class="grid-thumb" src="/api/files/${encodeURIComponent(file.name)}/thumb" loading="lazy" alt="${file.name}">`
+      ? `<img class="grid-thumb" src="/api/files/${encodeURIComponent(file.path)}/thumb" loading="lazy" alt="${file.name}">`
       : `<div class="grid-thumb-placeholder">${FILE_ICONS[file.ext] || '\u{1F4CE}'}</div>`;
     return `
-      <div class="grid-item" data-filename="${file.name}" onclick="openFile('${file.name}')">
+      <div class="grid-item" data-filename="${escapeAttr(file.path)}" onclick="openFile('${escapeAttr(file.path)}')">
         ${thumb}
         <div class="grid-info">
-          <div class="grid-name">${file.name}</div>
+          <div class="grid-name">${escapeHtml(file.name)}</div>
           <div class="grid-meta">
             <span class="status-dot ${file.status}"></span>
             ${file.status}${file.commentCount ? ` \u00B7 ${file.commentCount} comment${file.commentCount > 1 ? 's' : ''}` : ''}
@@ -1066,11 +1261,13 @@ function renderGrid() {
       </div>
     `;
   }).join('');
+
+  grid.innerHTML = dirHtml + fileHtml;
 }
 
 // ── Gallery View ──
-function openFile(filename) {
-  const idx = files.findIndex(f => f.name === filename);
+function openFile(filePath) {
+  const idx = onlyFiles().findIndex(f => f.path === filePath);
   if (idx === -1) return;
   currentIndex = idx;
   enterGallery();
@@ -1080,6 +1277,8 @@ function enterGallery(onRendered) {
   galleryMode = true;
   document.getElementById('overview-container').classList.add('hidden');
   document.getElementById('gallery').classList.add('active');
+  document.getElementById('breadcrumb-bar').style.display = 'none';
+  document.getElementById('orphan-banner').classList.remove('active');
   document.getElementById('btn-add-context').style.display = 'none';
   document.getElementById('btn-toggle-summary').style.display = 'none';
   document.getElementById('btn-back').style.display = '';
@@ -1092,6 +1291,7 @@ function exitGallery() {
   galleryMode = false;
   document.getElementById('overview-container').classList.remove('hidden');
   document.getElementById('gallery').classList.remove('active');
+  document.getElementById('breadcrumb-bar').style.display = '';
   document.getElementById('btn-add-context').style.display = '';
   document.getElementById('btn-toggle-summary').style.display = '';
   document.getElementById('btn-back').style.display = 'none';
@@ -1099,8 +1299,9 @@ function exitGallery() {
 }
 
 async function renderGalleryItem() {
-  if (!files[currentIndex]) return;
-  const file = files[currentIndex];
+  const fileItems = onlyFiles();
+  if (!fileItems[currentIndex]) return;
+  const file = fileItems[currentIndex];
   const isImage = IMAGE_EXTS.includes(file.ext);
 
   // Reset annotation state on navigation
@@ -1116,26 +1317,27 @@ async function renderGalleryItem() {
   // Preview
   const previewEl = document.getElementById('preview-content');
   if (isImage) {
-    previewEl.innerHTML = `<div class="zoom-container" id="zoom-container"><img src="/api/files/${encodeURIComponent(file.name)}/preview" alt="${file.name}" id="zoom-img"><svg class="region-overlay" id="region-overlay"></svg></div>`;
+    previewEl.innerHTML = `<div class="zoom-container" id="zoom-container"><img src="/api/files/${encodeURIComponent(file.path)}/preview" alt="${file.name}" id="zoom-img"><svg class="region-overlay" id="region-overlay"></svg></div>`;
     initZoom();
   } else if (file.ext === '.pdf') {
-    previewEl.innerHTML = `<iframe src="/api/files/${encodeURIComponent(file.name)}/preview" style="width:100%;height:100%;border:none;border-radius:4px"></iframe>`;
+    previewEl.innerHTML = `<iframe src="/api/files/${encodeURIComponent(file.path)}/preview" style="width:100%;height:100%;border:none;border-radius:4px"></iframe>`;
   } else {
     previewEl.innerHTML = `<div class="file-placeholder"><div class="icon">${FILE_ICONS[file.ext] || '\u{1F4CE}'}</div><div class="name">${file.name}</div></div>`;
   }
 
   // Sidebar info
   document.getElementById('sidebar-filename').textContent = file.name;
-  document.getElementById('sidebar-position').textContent = `${currentIndex + 1} of ${files.length}`;
-  document.getElementById('sidebar-progress-fill').style.width = `${((currentIndex + 1) / files.length) * 100}%`;
+  document.getElementById('sidebar-position').textContent = `${currentIndex + 1} of ${fileItems.length}`;
+  document.getElementById('sidebar-progress-fill').style.width = `${((currentIndex + 1) / fileItems.length) * 100}%`;
 
   // Load comments from file data we already have
-  renderComments(file.name, file);
+  renderComments(file.path, file);
 
   // Clear input
   document.getElementById('comment-input').value = '';
 }
 
+// filename param is now a relative path (file.path)
 function renderComments(filename, fileCtx) {
   const list = document.getElementById('comments-list');
   if (!fileCtx || fileCtx.comments.length === 0) {
@@ -1316,15 +1518,21 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+async function reloadCurrentDir() {
+  const dirParam = currentDir ? `?dir=${encodeURIComponent(currentDir)}` : '';
+  files = await api(`/api/files${dirParam}`);
+  updateProgress();
+}
+
 async function addComment() {
   const input = document.getElementById('comment-input');
   const text = input.value.trim();
   if (!text) return;
-  const file = files[currentIndex];
+  const file = onlyFiles()[currentIndex];
   const body = { author: 'user', text };
   if (lastAudioFilename) body.audio = lastAudioFilename;
   if (stagedRegion) body.region = stagedRegion;
-  await api(`/api/files/${encodeURIComponent(file.name)}/comments`, {
+  await api(`/api/files/${encodeURIComponent(file.path)}/comments`, {
     method: 'POST',
     body,
   });
@@ -1333,10 +1541,7 @@ async function addComment() {
   stagedRegion = null;
   updateStagedRegionUI();
   renderRegionOverlay();
-  // Reload file data
-  const updated = await api('/api/files');
-  files = updated;
-  updateProgress();
+  await reloadCurrentDir();
   renderGalleryItem();
 }
 
@@ -1344,26 +1549,23 @@ async function deleteComment(filename, index) {
   await api(`/api/files/${encodeURIComponent(filename)}/comments/${index}`, {
     method: 'DELETE',
   });
-  const updated = await api('/api/files');
-  files = updated;
-  updateProgress();
+  await reloadCurrentDir();
   renderGalleryItem();
 }
 
 async function skipFile() {
-  const file = files[currentIndex];
-  await api(`/api/files/${encodeURIComponent(file.name)}/status`, {
+  const file = onlyFiles()[currentIndex];
+  await api(`/api/files/${encodeURIComponent(file.path)}/status`, {
     method: 'PATCH',
     body: { status: 'skipped' },
   });
-  const updated = await api('/api/files');
-  files = updated;
-  updateProgress();
+  await reloadCurrentDir();
   goNext();
 }
 
 function goNext() {
-  if (currentIndex < files.length - 1) {
+  const fileItems = onlyFiles();
+  if (currentIndex < fileItems.length - 1) {
     currentIndex++;
     renderGalleryItem();
   }
@@ -1378,21 +1580,26 @@ function goPrev() {
 
 // Start "Add Context" from first pending file
 function startAddContext() {
-  const firstPending = files.findIndex(f => f.status === 'pending');
+  const fileItems = onlyFiles();
+  const firstPending = fileItems.findIndex(f => f.status === 'pending');
   currentIndex = firstPending >= 0 ? firstPending : 0;
   enterGallery();
 }
 
 // ── Summary Reference Navigation ──
-function navigateToComment(filename, commentIndex) {
-  const fileIdx = files.findIndex(f => f.name === filename);
+// filePath can be a relative path like "subdir/IMG_5210.jpeg" or just "IMG_5210.jpeg"
+function navigateToComment(filePath, commentIndex) {
+  const fileItems = onlyFiles();
+  // Try matching by path first, then by name (for backward compat with old summaries)
+  let fileIdx = fileItems.findIndex(f => f.path === filePath);
+  if (fileIdx === -1) fileIdx = fileItems.findIndex(f => f.name === filePath);
   if (fileIdx === -1) {
-    showRefError('File not found: ' + filename);
+    showRefError('File not found: ' + filePath);
     return;
   }
   currentIndex = fileIdx;
   enterGallery(() => {
-    const commentId = 'comment-' + encodeURIComponent(filename) + '-' + commentIndex;
+    const commentId = 'comment-' + encodeURIComponent(fileItems[fileIdx].path) + '-' + commentIndex;
     const commentEl = document.getElementById(commentId);
     if (commentEl) {
       commentEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -1401,15 +1608,17 @@ function navigateToComment(filename, commentIndex) {
         commentEl.classList.remove('highlight-flash');
       }, { once: true });
     } else {
-      showRefError('Comment #' + commentIndex + ' not found on ' + filename);
+      showRefError('Comment #' + commentIndex + ' not found on ' + filePath);
     }
   });
 }
 
-function navigateToImage(filename) {
-  const fileIdx = files.findIndex(f => f.name === filename);
+function navigateToImage(filePath) {
+  const fileItems = onlyFiles();
+  let fileIdx = fileItems.findIndex(f => f.path === filePath);
+  if (fileIdx === -1) fileIdx = fileItems.findIndex(f => f.name === filePath);
   if (fileIdx === -1) {
-    showRefError('File not found: ' + filename);
+    showRefError('File not found: ' + filePath);
     return;
   }
   currentIndex = fileIdx;
@@ -1610,7 +1819,7 @@ function onPanStart(e) {
     editingRegionIndex = idx;
 
     // Determine drag type from click position relative to region edges
-    const comment = (files[currentIndex].comments || [])[idx];
+    const comment = (onlyFiles()[currentIndex].comments || [])[idx];
     if (comment && comment.region) {
       const clickPt = viewportToImgPct(e.clientX, e.clientY);
       const r = comment.region;
@@ -1648,7 +1857,7 @@ function onPanStart(e) {
 function onEditStart(e, idx, type) {
   editDragType = type;
   editingRegionIndex = idx;
-  const comments = files[currentIndex].comments || [];
+  const comments = onlyFiles()[currentIndex].comments || [];
   editStartRegion = { ...comments[idx].region };
   editStartMouse = viewportToImgPct(e.clientX, e.clientY);
 
@@ -1657,7 +1866,7 @@ function onEditStart(e, idx, type) {
     const dx = cur.x - editStartMouse.x;
     const dy = cur.y - editStartMouse.y;
     const r = editStartRegion;
-    const comment = files[currentIndex].comments[idx];
+    const comment = onlyFiles()[currentIndex].comments[idx];
 
     if (editDragType === 'move') {
       comment.region = {
@@ -1698,10 +1907,10 @@ function onEditStart(e, idx, type) {
     editStartMouse = null;
     editStartRegion = null;
     // Save to server
-    const file = files[currentIndex];
+    const file = onlyFiles()[currentIndex];
     const comment = file.comments[idx];
     try {
-      await api(`/api/files/${encodeURIComponent(file.name)}/comments/${idx}/region`, {
+      await api(`/api/files/${encodeURIComponent(file.path)}/comments/${idx}/region`, {
         method: 'PUT',
         body: { region: comment.region },
       });
@@ -1807,8 +2016,8 @@ function renderRegionOverlay() {
   }
 
   // 3. Persistent comment regions
-  if (showAnnotations && files[currentIndex]) {
-    const comments = files[currentIndex].comments || [];
+  if (showAnnotations && onlyFiles()[currentIndex]) {
+    const comments = onlyFiles()[currentIndex].comments || [];
     comments.forEach((c, i) => {
       if (!c.region) return;
       const r = c.region;
@@ -1862,7 +2071,7 @@ function renderRegionOverlay() {
       // Dynamic cursor based on position within rect
       el.addEventListener('mousemove', (ev) => {
         const idx = parseInt(el.dataset.regionIdx, 10);
-        const comment = (files[currentIndex].comments || [])[idx];
+        const comment = (onlyFiles()[currentIndex].comments || [])[idx];
         if (!comment || !comment.region) return;
         const pt = viewportToImgPct(ev.clientX, ev.clientY);
         const r = comment.region;
@@ -1999,6 +2208,11 @@ document.querySelectorAll('.filter-btn').forEach(btn => {
     activeFilter = btn.dataset.filter;
     renderGrid();
   });
+});
+
+document.getElementById('search-input').addEventListener('input', (e) => {
+  searchQuery = e.target.value.trim();
+  renderGrid();
 });
 
 // Keyboard shortcuts
@@ -2154,10 +2368,10 @@ async function startRecording() {
       stream.getTracks().forEach(t => t.stop());
       if (audioChunks.length === 0) return;
       const blob = new Blob(audioChunks, { type: 'audio/webm' });
-      const file = files[currentIndex];
+      const file = onlyFiles()[currentIndex];
       if (!file) return;
       // Upload audio
-      const res = await fetch(`/api/files/${encodeURIComponent(file.name)}/audio`, {
+      const res = await fetch(`/api/files/${encodeURIComponent(file.path)}/audio`, {
         method: 'POST',
         body: blob,
       });
@@ -2250,7 +2464,7 @@ document.getElementById('btn-ask-claude').addEventListener('click', async () => 
     document.getElementById('btn-settings').click();
     return;
   }
-  const file = files[currentIndex];
+  const file = onlyFiles()[currentIndex];
   if (!file) return;
 
   const btn = document.getElementById('btn-ask-claude');
@@ -2259,7 +2473,7 @@ document.getElementById('btn-ask-claude').addEventListener('click', async () => 
   btn.classList.add('loading');
 
   try {
-    const res = await api(`/api/files/${encodeURIComponent(file.name)}/ask-claude`, { method: 'POST' });
+    const res = await api(`/api/files/${encodeURIComponent(file.path)}/ask-claude`, { method: 'POST' });
     if (res.error) {
       alert('Error: ' + res.error);
     }
@@ -2269,10 +2483,7 @@ document.getElementById('btn-ask-claude').addEventListener('click', async () => 
     btn.disabled = false;
     btn.textContent = 'Ask Claude';
     btn.classList.remove('loading');
-    // Refresh to show new comment
-    const updated = await api('/api/files');
-    files = updated;
-    updateProgress();
+    await reloadCurrentDir();
     renderGalleryItem();
   }
 });
@@ -2283,7 +2494,7 @@ document.getElementById('btn-auto-annotate').addEventListener('click', async () 
     document.getElementById('btn-settings').click();
     return;
   }
-  const file = files[currentIndex];
+  const file = onlyFiles()[currentIndex];
   if (!file) return;
 
   const btn = document.getElementById('btn-auto-annotate');
@@ -2292,7 +2503,7 @@ document.getElementById('btn-auto-annotate').addEventListener('click', async () 
   btn.classList.add('loading');
 
   try {
-    const res = await api(`/api/files/${encodeURIComponent(file.name)}/auto-annotate`, { method: 'POST' });
+    const res = await api(`/api/files/${encodeURIComponent(file.path)}/auto-annotate`, { method: 'POST' });
     if (res.error) {
       alert('Error: ' + res.error);
     }
@@ -2302,9 +2513,7 @@ document.getElementById('btn-auto-annotate').addEventListener('click', async () 
     btn.disabled = false;
     btn.innerHTML = btnSvg;
     btn.classList.remove('loading');
-    const updated = await api('/api/files');
-    files = updated;
-    updateProgress();
+    await reloadCurrentDir();
     renderGalleryItem();
   }
 });
@@ -2344,7 +2553,7 @@ function wrapText(ctx, text, maxWidth) {
 
 // ── Copy (plain image) ──
 document.getElementById('btn-copy-image').addEventListener('click', async () => {
-  const file = files[currentIndex];
+  const file = onlyFiles()[currentIndex];
   if (!file) return;
   const btn = document.getElementById('btn-copy-image');
   const originalHtml = btn.innerHTML;
@@ -2370,7 +2579,7 @@ document.getElementById('btn-copy-image').addEventListener('click', async () => 
 
 // ── Copy+ (annotated image with comment legend) ──
 document.getElementById('btn-copy-context').addEventListener('click', async () => {
-  const file = files[currentIndex];
+  const file = onlyFiles()[currentIndex];
   if (!file) return;
   const btn = document.getElementById('btn-copy-context');
   const originalHtml = btn.innerHTML;
@@ -2538,7 +2747,8 @@ if (typeof marked !== 'undefined') {
 }
 
 async function loadSummary() {
-  const data = await api('/api/summary');
+  const dirParam = currentDir ? `?dir=${encodeURIComponent(currentDir)}` : '';
+  const data = await api(`/api/summary${dirParam}`);
   if (data.content !== null && data.lastModified !== summaryLastModified) {
     summaryRawContent = data.content;
     summaryLastModified = data.lastModified;
@@ -2574,6 +2784,9 @@ function toggleSummary() {
     btn.classList.remove('btn-ghost');
     loadSummary();
     loadVersionList();
+    // Show aggregate button only when there are subdirectories
+    const hasDirs = onlyDirs().length > 0;
+    document.getElementById('btn-generate-aggregate').style.display = hasDirs ? '' : 'none';
   } else {
     rail.classList.remove('active');
     btn.classList.remove('btn-primary');
@@ -2587,7 +2800,8 @@ function toggleSummaryEdit() {
     const editor = document.getElementById('summary-editor');
     if (editor) {
       summaryRawContent = editor.value;
-      api('/api/summary', { method: 'POST', body: { content: summaryRawContent } });
+      const dirParam = currentDir ? `?dir=${encodeURIComponent(currentDir)}` : '';
+      api(`/api/summary${dirParam}`, { method: 'POST', body: { content: summaryRawContent } });
     }
     summaryEditMode = false;
     editBtn.textContent = 'Edit';
@@ -2610,16 +2824,22 @@ function copySummary() {
   });
 }
 
-async function generateSummaryAction() {
+async function generateSummaryAction(aggregate = false) {
   if (!hasApiKey) {
     document.getElementById('btn-settings').click();
     return;
   }
-  const btn = document.getElementById('btn-generate-summary');
+  const btn = aggregate ? document.getElementById('btn-generate-aggregate') : document.getElementById('btn-generate-summary');
+  if (!btn) return;
   btn.disabled = true;
   btn.textContent = 'Generating...';
   try {
-    const res = await api('/api/summary/generate', { method: 'POST', body: {} });
+    let url = '/api/summary/generate';
+    const params = [];
+    if (currentDir) params.push(`dir=${encodeURIComponent(currentDir)}`);
+    if (aggregate) params.push('aggregate=true');
+    if (params.length) url += '?' + params.join('&');
+    const res = await api(url, { method: 'POST', body: {} });
     if (res.error) {
       alert('Error: ' + res.error);
     } else if (res.content) {
@@ -2634,7 +2854,7 @@ async function generateSummaryAction() {
     alert('Failed to generate summary: ' + e.message);
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Generate';
+    btn.textContent = aggregate ? 'Generate All' : 'Generate';
   }
 }
 
@@ -2655,7 +2875,8 @@ function updateVersionNav() {
 
 async function loadVersion(version) {
   try {
-    const res = await api(`/api/summary/versions/${version}`);
+    const dirParam = currentDir ? `?dir=${encodeURIComponent(currentDir)}` : '';
+    const res = await api(`/api/summary/versions/${version}${dirParam}`);
     if (res.error) return;
     summaryRawContent = res.content;
     summaryCurrentVersion = res.version;
@@ -2667,7 +2888,8 @@ async function loadVersion(version) {
 
 async function loadVersionList() {
   try {
-    const res = await api('/api/summary/versions');
+    const dirParam = currentDir ? `?dir=${encodeURIComponent(currentDir)}` : '';
+    const res = await api(`/api/summary/versions${dirParam}`);
     summaryTotalVersions = res.total;
     if (res.total > 0) {
       summaryCurrentVersion = res.versions[res.versions.length - 1];
@@ -2679,7 +2901,8 @@ async function loadVersionList() {
 document.getElementById('btn-toggle-summary').addEventListener('click', toggleSummary);
 document.getElementById('btn-summary-edit').addEventListener('click', toggleSummaryEdit);
 document.getElementById('btn-summary-copy').addEventListener('click', copySummary);
-document.getElementById('btn-generate-summary').addEventListener('click', generateSummaryAction);
+document.getElementById('btn-generate-summary').addEventListener('click', () => generateSummaryAction(false));
+document.getElementById('btn-generate-aggregate').addEventListener('click', () => generateSummaryAction(true));
 document.getElementById('btn-version-prev').addEventListener('click', () => {
   if (summaryCurrentVersion > 1) loadVersion(summaryCurrentVersion - 1);
 });
@@ -2704,7 +2927,37 @@ document.getElementById('summary-content').addEventListener('click', (e) => {
   }
 });
 
+// ── Hash-based directory routing ──
+function initFromHash() {
+  const hash = location.hash.slice(1);
+  if (hash) {
+    currentDir = decodeURIComponent(hash);
+  }
+}
+
+window.addEventListener('hashchange', () => {
+  const hash = location.hash.slice(1);
+  const dir = hash ? decodeURIComponent(hash) : '';
+  if (dir !== currentDir) {
+    currentDir = dir;
+    loadFiles();
+  }
+});
+
+// Keyboard: Backspace to go up a directory (when not in gallery or input)
+document.addEventListener('keydown', (e) => {
+  if (galleryMode) return;
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.key === 'Backspace' && currentDir) {
+    e.preventDefault();
+    const parts = currentDir.split('/');
+    parts.pop();
+    navigateToDir(parts.join('/'));
+  }
+});
+
 // ── Init ──
+initFromHash();
 loadConfig();
 loadFiles();
 checkApiKey();
