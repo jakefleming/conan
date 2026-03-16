@@ -10,7 +10,7 @@ bun run server.ts /path/to/your/session-folder
 
 Then open [http://localhost:3333](http://localhost:3333).
 
-Your session folder should contain the images, PDFs, or documents you want to annotate. Conan creates a `.context.json` sidecar file in that folder to store all annotations.
+Your session folder should contain the images, PDFs, or documents you want to annotate. Subdirectories are fully supported — browse into them via the grid and breadcrumb navigation.
 
 ## Requirements
 
@@ -21,25 +21,41 @@ Your session folder should contain the images, PDFs, or documents you want to an
 
 ### Annotation Workflow
 - **Grid overview** with filter tabs (All / Pending / Annotated / Skipped) for quick triage
-- **Gallery mode** for focused annotation -- large preview + sidebar with comments
+- **Gallery mode** for focused annotation — large preview + sidebar with comments
 - **Voice input** with live transcription (Web Speech API) and audio recording saved alongside comments
 - **Punctuation heuristics** that clean up speech-to-text output (capitalization, sentence breaks, proper nouns)
-- **Ask Claude** button on any file -- sends the image + existing comments to Claude for AI analysis that adds implementation notes without repeating what you already said
+- **Region annotations** — draw rectangles on images to annotate specific areas; coordinates stored as percentages
+- **Ask Claude** button on any file — sends the image + existing comments to Claude for AI analysis
+- **Auto-annotate** — Claude identifies regions in an image and creates annotated comments for each
 - **Keyboard shortcuts** for fast navigation: arrow keys, `/` to focus comment input, `R` to record, `S` to skip, `Esc` to return to grid
 
+### Subdirectory Navigation
+- **Browse into subdirectories** — folders appear as grid items at the top of the file grid
+- **Breadcrumb bar** — clickable path segments for navigating up through the directory hierarchy
+- **Backspace** navigates to the parent directory from grid view
+- **URL hash routing** — directory state persists across browser back/forward
+- **Per-directory data** — each subdirectory has its own `.context.json`, `SUMMARY.md`, thumbnails, and audio
+
 ### Summary Generation
-- **Combined summary** with executive overview at the top and design deliverables at the bottom, generated in a single pass
-- **Clickable citations** -- every summary bullet links back to the specific comment it references; clicking navigates to that comment with a highlight flash
-- **Image references** -- file names in the summary are clickable and open that image in gallery view
-- **Version history** -- each generation creates a new version (`v1`, `v2`, ...) stored in `.summary-history/`; flip through older versions with prev/next arrows
-- **Edit mode** -- manually edit the rendered summary markdown in-place
-- **Copy to clipboard** -- one-click copy of the raw markdown
+- **Per-directory summaries** scoped to the files in the current folder
+- **Aggregate summaries** — generate a root-level summary that spans all subdirectories recursively
+- **Clickable citations** — every summary bullet links back to the specific comment it references; clicking navigates to that comment with a highlight flash
+- **Image references** — file names in the summary are clickable and open that image in gallery view
+- **Version history** — each generation creates a new version (`v1`, `v2`, ...) stored in `.summary-history/`; flip through older versions with prev/next arrows
+- **Edit mode** — manually edit the rendered summary markdown in-place
+- **Copy to clipboard** — one-click copy of the raw markdown
+
+### File Move Handling
+- **Content hashing** — SHA-256 of the first 64KB of each annotated file, used to detect moved or renamed files
+- **Orphan detection** — if a file is deleted or moved, a banner alerts you that annotations don't match any file
+- **Reconcile** — scans the full directory tree, matches orphaned annotations to moved files by hash, and migrates them automatically
+- **Clean up** — option to remove orphaned annotations that can't be reconciled
 
 ### Architecture
-- **Single HTML file** frontend -- no build step, no framework, vanilla JS with marked.js for markdown rendering
-- **Bun server** (`server.ts`) -- serves the app, handles file I/O, proxies Anthropic API calls
-- **Sidecar data** -- all annotations stored in `.context.json` next to your files, summaries in `SUMMARY.md` and `.summary-history/`
-- **Auto-refresh polling** -- if you edit `.context.json` externally, the UI picks up changes within 2 seconds
+- **Single HTML file** frontend — no build step, no framework, vanilla JS with marked.js for markdown rendering
+- **Bun server** (`server.ts`) — serves the app, handles file I/O, proxies Anthropic API calls
+- **Sidecar data** — all annotations stored in `.context.json` next to your files, summaries in `SUMMARY.md` and `.summary-history/`
+- **Auto-refresh polling** — if you edit `.context.json` externally, the UI picks up changes within 2 seconds
 - **API key stored locally** in `.annotator-settings.json` (gitignored)
 
 ## Supported File Types
@@ -63,33 +79,77 @@ context-annotator/
 
 ## Data Files (created in your session folder)
 
+Each directory is self-contained:
+
 ```
 your-session-folder/
-  .context.json            # All annotations (comments, statuses, timestamps)
+  .context.json            # Annotations for files in this directory
   .summary-history/        # Versioned summaries (v1.md, v2.md, ...)
+  .thumbs/                 # Cached thumbnails
   .audio_*.ogg/.webm       # Voice recording files
   SUMMARY.md               # Latest generated summary
+  subfolder/
+    .context.json          # Annotations for this subfolder's files
+    .summary-history/
+    .thumbs/
+    SUMMARY.md
 ```
 
 ## API Endpoints
+
+### Files & Directories
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/files?dir=subdir` | List files + subdirectories for a directory |
+| `GET` | `/api/tree` | Recursive directory tree (cached 5s TTL) |
+| `GET` | `/api/files/:path/preview` | Serve file content |
+| `GET` | `/api/files/:path/thumb` | Serve thumbnail |
+| `PATCH` | `/api/files/:path/status` | Update file status |
+
+`:path` is the relative path from root, URL-encoded (slashes become `%2F`).
+
+### Comments
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/files/:path/comments` | Add a comment |
+| `DELETE` | `/api/files/:path/comments/:index` | Delete a comment |
+| `PUT` | `/api/files/:path/comments/:index/text` | Update comment text |
+| `PUT` | `/api/files/:path/comments/:index/region` | Update comment region |
+| `POST` | `/api/files/:path/comments/:index/fix` | Fix formatting with Claude |
+
+### Claude Analysis
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/files/:path/ask-claude` | AI analysis of a file |
+| `POST` | `/api/files/:path/auto-annotate` | AI region detection + annotation |
+
+### Summary
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/summary?dir=subdir` | Get current summary |
+| `POST` | `/api/summary?dir=subdir` | Save edited summary |
+| `POST` | `/api/summary/generate?dir=subdir&aggregate=true` | Generate summary (add `aggregate=true` for all subdirs) |
+| `GET` | `/api/summary/versions?dir=subdir` | List all summary versions |
+| `GET` | `/api/summary/versions/:n?dir=subdir` | Get specific version |
+
+### File Move Handling
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/orphans?dir=subdir` | List orphaned annotations |
+| `POST` | `/api/orphans/clean?dir=subdir` | Remove orphaned annotations |
+| `POST` | `/api/reconcile` | Match + migrate orphaned annotations by content hash |
+
+### Other
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/config` | Server config (folder path, API key status) |
 | `GET/POST` | `/api/settings` | Read/write API key |
-| `GET` | `/api/files` | List files with annotation status |
-| `GET` | `/api/files/:name/preview` | Serve file content |
-| `POST` | `/api/files/:name/comments` | Add a comment |
-| `DELETE` | `/api/files/:name/comments/:index` | Delete a comment |
-| `PATCH` | `/api/files/:name/status` | Update file status |
-| `POST` | `/api/files/:name/ask-claude` | AI analysis of a file |
-| `POST` | `/api/files/:name/audio` | Upload voice recording |
-| `GET` | `/api/audio/:name` | Serve audio file |
-| `GET` | `/api/summary` | Get current summary |
-| `POST` | `/api/summary` | Save edited summary |
-| `POST` | `/api/summary/generate` | Generate new summary version |
-| `GET` | `/api/summary/versions` | List all summary versions |
-| `GET` | `/api/summary/versions/:n` | Get specific version |
 
 ## License
 
