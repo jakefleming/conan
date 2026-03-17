@@ -816,6 +816,39 @@
     color: var(--text-muted);
     margin-top: 4px;
   }
+  .comment-attachments {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    margin-top: 6px;
+  }
+  .comment-att-chip {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px 3px 3px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 11px;
+    color: var(--text-muted);
+    transition: background 0.15s;
+    max-width: 160px;
+  }
+  .comment-att-chip:hover { background: var(--hover-overlay); color: var(--text); }
+  .comment-att-chip img.comment-att-img {
+    width: 28px;
+    height: 28px;
+    object-fit: cover;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+  .comment-att-name {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .comment-actions {
     position: absolute;
     top: 8px;
@@ -1406,31 +1439,7 @@
     font-weight: 600;
     letter-spacing: -0.02em;
   }
-  .chat-scope-toggle {
-    display: flex;
-    gap: 2px;
-    background: var(--surface-2);
-    border-radius: 7px;
-    padding: 2px;
-  }
-  .chat-scope-btn {
-    padding: 4px 10px;
-    font-size: 10px;
-    font-weight: 500;
-    border: none;
-    border-radius: 5px;
-    background: transparent;
-    color: var(--text-muted);
-    cursor: pointer;
-    font-family: inherit;
-    transition: all 0.15s;
-  }
-  .chat-scope-btn.active {
-    background: var(--surface-3);
-    color: var(--text);
-    box-shadow: var(--shadow-sm);
-  }
-  .chat-scope-btn:hover:not(.active) { color: var(--text); }
+  /* scope toggle removed — chat is now context-aware */
 
   .chat-messages {
     flex: 1;
@@ -2125,7 +2134,23 @@
     </div>
     <div class="comments-list" id="comments-list"></div>
     <div class="sidebar-input">
+      <div class="chat-attachments" id="sidebar-attachments" style="display:none"></div>
       <div class="input-row">
+        <div style="position:relative">
+          <button class="chat-attach-btn" id="sidebar-attach-btn" title="Attach images">
+            <i class="ph ph-paperclip" style="font-size:16px"></i>
+          </button>
+          <div class="chat-attach-menu" id="sidebar-attach-menu">
+            <button class="chat-attach-option" id="sidebar-attach-project">
+              <i class="ph ph-image" style="font-size:14px"></i>
+              From project files
+            </button>
+            <button class="chat-attach-option" id="sidebar-attach-upload">
+              <i class="ph ph-upload-simple" style="font-size:14px"></i>
+              Upload from device
+            </button>
+          </div>
+        </div>
         <div class="input-wrap">
           <textarea class="comment-input" id="comment-input" placeholder="Add your context..." rows="1"></textarea>
           <button class="btn-mic" id="btn-mic" title="Voice input"><i class="ph ph-microphone" style="font-size:16px"></i></button>
@@ -2135,6 +2160,7 @@
         </button>
       </div>
       <div class="voice-status" id="voice-status"></div>
+      <input type="file" id="sidebar-file-upload" accept="image/*" multiple style="display:none">
     </div>
   </div>
 </div>
@@ -2143,11 +2169,7 @@
 <div class="chat-panel" id="chat-panel">
   <div class="chat-header">
     <div class="chat-header-left">
-      <span class="chat-header-title">Chat with</span>
-      <div class="chat-scope-toggle">
-        <button class="chat-scope-btn active" data-scope="directory">This Folder</button>
-        <button class="chat-scope-btn" data-scope="all">All Folders</button>
-      </div>
+      <span class="chat-header-title">Chat</span>
     </div>
     <div style="display:flex;align-items:center;gap:8px">
       <button class="chat-copy-all" id="chat-copy-all" title="Copy entire conversation">
@@ -2515,6 +2537,16 @@ function renderComments(filename, fileCtx) {
       <div class="comment-author ${c.author}">${c.author}${regionLabel}</div>
       <div class="comment-text" data-comment-idx="${i}">${escapeHtml(c.text)}</div>
       ${c.audio ? `<audio controls preload="none" style="width:100%;height:28px;margin-top:6px;border-radius:4px"><source src="/api/audio/${encodeURIComponent(c.audio)}" type="audio/webm"></audio>` : ''}
+      ${c.attachments && c.attachments.length > 0 ? `<div class="comment-attachments">${c.attachments.map(att => {
+        const isImage = /\.(jpe?g|png|gif|webp)$/i.test(att.path || att.originalName || '');
+        const name = att.type === 'project' ? att.path.split('/').pop() : (att.originalName || att.path.split('/').pop());
+        const thumbSrc = att.type === 'project'
+          ? '/api/files/' + encodeURIComponent(att.path) + '/thumb'
+          : '/api/attachments/' + encodeURIComponent(att.path);
+        const icon = isImage ? '' : '<i class="ph ph-file" style="font-size:14px"></i>';
+        const img = isImage ? `<img src="${thumbSrc}" class="comment-att-img">` : icon;
+        return `<div class="comment-att-chip" data-att-type="${att.type}" data-att-path="${escapeHtml(att.path)}" title="${escapeHtml(name)}">${img}<span class="comment-att-name">${escapeHtml(name)}</span></div>`;
+      }).join('')}</div>` : ''}
       <div class="comment-time">${new Date(c.ts).toLocaleString()}</div>
     </div>`;
   }).join('');
@@ -2698,6 +2730,40 @@ function renderComments(filename, fileCtx) {
       ]);
     });
   });
+
+  // Attachment chip click handlers
+  list.querySelectorAll('.comment-att-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const type = chip.dataset.attType;
+      const path = chip.dataset.attPath;
+      if (type === 'project') {
+        // Navigate to that file in the gallery
+        const fileItems = onlyFiles();
+        const idx = fileItems.findIndex(f => f.path === path || f.name === path);
+        if (idx >= 0) {
+          currentIndex = idx;
+          renderGalleryItem();
+        } else {
+          // Might be in a different directory — try navigating
+          const parts = path.split('/');
+          if (parts.length > 1) {
+            const dir = parts.slice(0, -1).join('/');
+            const fileName = parts[parts.length - 1];
+            currentDir = dir;
+            reloadCurrentDir().then(() => {
+              enterGallery();
+              const newFiles = onlyFiles();
+              const newIdx = newFiles.findIndex(f => f.name === fileName);
+              if (newIdx >= 0) { currentIndex = newIdx; renderGalleryItem(); }
+            });
+          }
+        }
+      } else {
+        // Open local attachment in new tab
+        window.open('/api/attachments/' + encodeURIComponent(path), '_blank');
+      }
+    });
+  });
 }
 
 function escapeHtml(str) {
@@ -2715,11 +2781,32 @@ async function reloadCurrentDir() {
 async function addComment() {
   const input = document.getElementById('comment-input');
   const text = input.value.trim();
-  if (!text) return;
+  if (!text && sidebarAttachments.length === 0) return;
   const file = onlyFiles()[currentIndex];
-  const body = { author: 'user', text };
+  const body = { author: 'user', text: text || '' };
   if (lastAudioFilename) body.audio = lastAudioFilename;
   if (stagedRegion) body.region = stagedRegion;
+
+  // Process sidebar attachments
+  if (sidebarAttachments.length > 0) {
+    const attachments = [];
+    for (const att of sidebarAttachments) {
+      if (att.type === 'project') {
+        attachments.push({ type: 'project', path: att.path });
+      } else if (att.type === 'upload') {
+        // Upload external file to .attachments/ first
+        const res = await api('/api/attachments/upload', {
+          method: 'POST',
+          body: { dir: currentDir, data: att.data, name: att.name, mediaType: att.mediaType }
+        });
+        if (res.path) {
+          attachments.push({ type: 'local', path: res.path, originalName: att.name });
+        }
+      }
+    }
+    if (attachments.length > 0) body.attachments = attachments;
+  }
+
   await api(`/api/files/${encodeURIComponent(file.path)}/comments`, {
     method: 'POST',
     body,
@@ -2727,6 +2814,8 @@ async function addComment() {
   input.value = '';
   lastAudioFilename = null;
   stagedRegion = null;
+  sidebarAttachments = [];
+  renderSidebarAttachments();
   updateStagedRegionUI();
   renderRegionOverlay();
   await reloadCurrentDir();
@@ -3937,8 +4026,15 @@ async function askClaudeForFile() {
   }
 
   try {
-    const body = prompt ? { prompt } : undefined;
-    const res = await api(`/api/files/${encodeURIComponent(file.path)}/ask-claude`, { method: 'POST', body });
+    const body = {};
+    if (prompt) body.prompt = prompt;
+    if (sidebarAttachments.length > 0) {
+      body.attachments = sidebarAttachments.map(att => {
+        if (att.type === 'project') return { type: 'project', path: att.path, region: att.region };
+        return { type: 'upload', data: att.data, mediaType: att.mediaType, name: att.name };
+      });
+    }
+    const res = await api(`/api/files/${encodeURIComponent(file.path)}/ask-claude`, { method: 'POST', body: Object.keys(body).length > 0 ? body : undefined });
     if (res.error) {
       alert('Error: ' + res.error);
     }
@@ -3947,6 +4043,8 @@ async function askClaudeForFile() {
   } finally {
     sendBtn.disabled = false;
     sendBtn.innerHTML = originalHtml;
+    sidebarAttachments = [];
+    renderSidebarAttachments();
     await reloadCurrentDir();
     refreshSidebar();
   }
@@ -4549,7 +4647,7 @@ document.getElementById('summary-content').addEventListener('click', (e) => {
 const CHAT_STORAGE_KEY = 'conan-chats';
 let chatOpen = false;
 let chatHistory = [];
-let chatScope = 'directory';
+// Chat context is now automatic based on current view state
 let chatSending = false;
 let chatSessions = []; // [{id, title, messages, ts}]
 let activeChatId = null;
@@ -4864,8 +4962,8 @@ async function sendChatMessage(text) {
       body: {
         message: text,
         history: chatHistory.slice(0, -1),
-        scope: chatScope,
         dir: currentDir,
+        currentFile: document.getElementById('gallery')?.classList.contains('active') ? (onlyFiles()[currentIndex]?.path || '') : '',
         attachments: apiAttachments,
       },
     });
@@ -5015,6 +5113,7 @@ renderGrid = function() {
 
 // ── Chat Attachments ──
 let chatAttachments = []; // [{type:"project",path:"...",thumbUrl:"..."} or {type:"upload",data:"base64",mediaType:"...",name:"...",thumbUrl:"..."}]
+let sidebarAttachments = []; // same format as chatAttachments, for file-level sidebar
 
 function renderChatAttachments() {
   const container = document.getElementById('chat-attachments');
@@ -5039,69 +5138,148 @@ function cropUrl(filePath, region) {
   return `/api/files/${encodeURIComponent(filePath)}/crop?x=${region.x}&y=${region.y}&w=${region.w}&h=${region.h}`;
 }
 
-function addProjectAttachment(filePath, region, label) {
+function renderSidebarAttachments() {
+  const container = document.getElementById('sidebar-attachments');
+  if (sidebarAttachments.length === 0) {
+    container.style.display = 'none';
+    return;
+  }
+  container.style.display = 'flex';
+  container.innerHTML = sidebarAttachments.map((att, i) => {
+    const label = att.type === 'project' ? att.path.split('/').pop() : att.name;
+    return `<div class="chat-attachment-thumb"><img src="${att.thumbUrl}"><button class="remove-attachment" data-att-idx="${i}">&times;</button><div class="chat-attachment-label">${escapeHtml(label)}</div></div>`;
+  }).join('');
+  container.querySelectorAll('.remove-attachment').forEach(btn => {
+    btn.addEventListener('click', () => {
+      sidebarAttachments.splice(parseInt(btn.dataset.attIdx), 1);
+      renderSidebarAttachments();
+    });
+  });
+}
+
+function addProjectAttachment(filePath, region, label, target) {
+  const arr = target === 'sidebar' ? sidebarAttachments : chatAttachments;
   const key = region ? `${filePath}#${region.x},${region.y},${region.w},${region.h}` : filePath;
-  if (chatAttachments.find(a => a._key === key)) return; // no duplicates
+  if (arr.find(a => a._key === key)) return; // no duplicates
   const thumbUrl = region ? cropUrl(filePath, region) : `/api/files/${encodeURIComponent(filePath)}/thumb`;
-  chatAttachments.push({
+  arr.push({
     type: 'project', path: filePath, region: region || null,
     thumbUrl, _key: key, _label: label || filePath.split('/').pop(),
   });
-  renderChatAttachments();
+  if (target === 'sidebar') renderSidebarAttachments();
+  else renderChatAttachments();
 }
 
-function showProjectFilePicker() {
-  const imageFiles = files.filter(f => f.type === 'file' && /\.(jpe?g|png|gif|webp)$/i.test(f.name));
-  if (imageFiles.length === 0) { alert('No image files in current directory'); return; }
-
+async function showProjectFilePicker(target) {
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:200;display:flex;align-items:center;justify-content:center';
   const modal = document.createElement('div');
-  modal.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;max-width:600px;width:92%;max-height:75vh;overflow-y:auto';
+  modal.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:0;max-width:600px;width:92%;max-height:75vh;display:flex;flex-direction:column;overflow:hidden';
 
-  let html = '<div style="font-weight:600;margin-bottom:12px;font-size:14px">Select images &amp; crops to attach</div>';
-  html += '<div style="display:flex;flex-direction:column;gap:12px">';
-  imageFiles.forEach(f => {
-    const crops = (f.comments || []).filter(c => c.region);
-    html += '<div style="display:flex;gap:8px;align-items:flex-start">';
-    // Full image
-    html += `<div class="pick-item" data-path="${escapeHtml(f.path)}" data-type="full" style="cursor:pointer;border-radius:8px;overflow:hidden;border:2px solid transparent;transition:border-color 0.15s;width:80px;min-width:80px;flex-shrink:0"><img src="/api/files/${encodeURIComponent(f.path)}/thumb" style="width:100%;aspect-ratio:1;object-fit:cover;display:block"><div style="font-size:9px;padding:2px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-muted)">${escapeHtml(f.name)}</div></div>`;
-    // Crops
-    if (crops.length > 0) {
-      html += '<div style="display:flex;flex-wrap:wrap;gap:6px;padding-top:2px">';
-      crops.forEach((c, ci) => {
-        const commentIdx = f.comments.indexOf(c);
-        const r = c.region;
-        const url = cropUrl(f.path, r);
-        const label = c.text.length > 30 ? c.text.slice(0, 30) + '...' : c.text;
-        html += `<div class="pick-item" data-path="${escapeHtml(f.path)}" data-type="crop" data-region='${JSON.stringify(r)}' data-cidx="${commentIdx}" style="cursor:pointer;border-radius:6px;overflow:hidden;border:2px solid transparent;transition:border-color 0.15s;width:60px;min-width:60px"><img src="${url}" style="width:100%;aspect-ratio:1;object-fit:cover;display:block"><div style="font-size:8px;padding:1px 3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-muted)" title="${escapeHtml(c.text)}">#${commentIdx + 1} ${escapeHtml(label)}</div></div>`;
-      });
-      html += '</div>';
-    }
-    html += '</div>';
-  });
-  html += '</div>';
-  html += '<div style="margin-top:12px;text-align:right"><button class="btn btn-ghost" id="pick-cancel" style="margin-right:8px">Cancel</button><button class="btn btn-primary" id="pick-done">Attach Selected</button></div>';
-  modal.innerHTML = html;
+  modal.innerHTML = `
+    <div style="padding:16px 16px 0;flex-shrink:0">
+      <div style="font-weight:600;margin-bottom:10px;font-size:14px">Attach project files</div>
+      <input type="text" id="pick-search" placeholder="Search files..." style="width:100%;padding:8px 12px;background:var(--bg);border:1px solid var(--border-strong);border-radius:var(--radius);color:var(--text);font-size:13px;font-family:inherit;outline:none;box-sizing:border-box">
+    </div>
+    <div id="pick-file-list" style="flex:1;overflow-y:auto;padding:12px 16px">
+      <div style="color:var(--text-muted);font-size:12px;padding:20px 0;text-align:center">Loading files...</div>
+    </div>
+    <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;flex-shrink:0">
+      <span id="pick-count" style="font-size:11px;color:var(--text-muted)">0 selected</span>
+      <div>
+        <button class="btn btn-ghost" id="pick-cancel" style="margin-right:8px">Cancel</button>
+        <button class="btn btn-primary" id="pick-done">Attach Selected</button>
+      </div>
+    </div>`;
   overlay.appendChild(modal);
   document.body.appendChild(overlay);
 
-  const selected = new Map(); // key -> {path, region, label}
-  modal.querySelectorAll('.pick-item').forEach(el => {
-    el.addEventListener('click', () => {
-      const p = el.dataset.path;
-      const isCrop = el.dataset.type === 'crop';
-      const region = isCrop ? JSON.parse(el.dataset.region) : null;
-      const key = isCrop ? `${p}#${region.x},${region.y},${region.w},${region.h}` : p;
-      if (selected.has(key)) { selected.delete(key); el.style.borderColor = 'transparent'; }
-      else { selected.set(key, { path: p, region }); el.style.borderColor = 'var(--accent)'; }
+  // Fetch all files from root
+  let allFiles = [];
+  try {
+    const res = await api('/api/files-all');
+    allFiles = res;
+  } catch (e) {
+    modal.querySelector('#pick-file-list').innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:20px 0;text-align:center">Failed to load files</div>';
+    return;
+  }
+
+  const IMAGE_RE = /\.(jpe?g|png|gif|webp)$/i;
+  const selected = new Map();
+
+  function renderFileList(filter) {
+    const listEl = modal.querySelector('#pick-file-list');
+    const q = (filter || '').toLowerCase();
+    const filtered = q ? allFiles.filter(f => f.path.toLowerCase().includes(q)) : allFiles;
+
+    if (filtered.length === 0) {
+      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:20px 0;text-align:center">No files match your search</div>';
+      return;
+    }
+
+    // Group by directory
+    const groups = {};
+    filtered.forEach(f => {
+      const dir = f.dir || '(root)';
+      if (!groups[dir]) groups[dir] = [];
+      groups[dir].push(f);
     });
-  });
+
+    let html = '';
+    for (const [dir, dirFiles] of Object.entries(groups)) {
+      html += `<div style="margin-bottom:12px">`;
+      html += `<div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;padding-left:2px">${escapeHtml(dir)}</div>`;
+      html += `<div style="display:flex;flex-wrap:wrap;gap:6px">`;
+      dirFiles.forEach(f => {
+        const isImage = IMAGE_RE.test(f.name);
+        const isSelected = selected.has(f.path);
+        const borderColor = isSelected ? 'var(--accent)' : 'transparent';
+        if (isImage) {
+          html += `<div class="pick-item" data-path="${escapeHtml(f.path)}" data-type="full" style="cursor:pointer;border-radius:8px;overflow:hidden;border:2px solid ${borderColor};transition:border-color 0.15s;width:72px;min-width:72px;flex-shrink:0">
+            <img src="/api/files/${encodeURIComponent(f.path)}/thumb" style="width:100%;aspect-ratio:1;object-fit:cover;display:block" loading="lazy">
+            <div style="font-size:8px;padding:2px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-muted)">${escapeHtml(f.name)}</div>
+          </div>`;
+        } else {
+          const icon = f.ext === '.pdf' ? 'ph-file-pdf' : f.ext === '.txt' || f.ext === '.md' ? 'ph-file-text' : 'ph-file';
+          html += `<div class="pick-item" data-path="${escapeHtml(f.path)}" data-type="full" style="cursor:pointer;border-radius:8px;overflow:hidden;border:2px solid ${borderColor};transition:border-color 0.15s;width:72px;min-width:72px;flex-shrink:0;background:var(--surface-2)">
+            <div style="width:100%;aspect-ratio:1;display:flex;align-items:center;justify-content:center"><i class="ph ${icon}" style="font-size:24px;color:var(--text-muted)"></i></div>
+            <div style="font-size:8px;padding:2px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-muted)">${escapeHtml(f.name)}</div>
+          </div>`;
+        }
+      });
+      html += `</div></div>`;
+    }
+    listEl.innerHTML = html;
+
+    // Re-bind click handlers
+    listEl.querySelectorAll('.pick-item').forEach(el => {
+      el.addEventListener('click', () => {
+        const p = el.dataset.path;
+        if (selected.has(p)) {
+          selected.delete(p);
+          el.style.borderColor = 'transparent';
+        } else {
+          selected.set(p, { path: p, region: null });
+          el.style.borderColor = 'var(--accent)';
+        }
+        modal.querySelector('#pick-count').textContent = `${selected.size} selected`;
+      });
+    });
+  }
+
+  renderFileList('');
+
+  // Search
+  const searchInput = modal.querySelector('#pick-search');
+  searchInput.addEventListener('input', () => renderFileList(searchInput.value));
+  searchInput.focus();
+
   modal.querySelector('#pick-cancel').addEventListener('click', () => overlay.remove());
   overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
   modal.querySelector('#pick-done').addEventListener('click', () => {
-    selected.forEach(({ path, region }) => addProjectAttachment(path, region));
-    renderChatAttachments();
+    selected.forEach(({ path, region }) => addProjectAttachment(path, region, null, target));
+    if (target === 'sidebar') renderSidebarAttachments();
+    else renderChatAttachments();
     overlay.remove();
   });
 }
@@ -5115,12 +5293,16 @@ document.addEventListener('click', (e) => {
   if (menu && !e.target.closest('.chat-attach-btn') && !e.target.closest('.chat-attach-menu')) {
     menu.classList.remove('open');
   }
+  const sMenu = document.getElementById('sidebar-attach-menu');
+  if (sMenu && !e.target.closest('#sidebar-attach-btn') && !e.target.closest('#sidebar-attach-menu')) {
+    sMenu.classList.remove('open');
+  }
 });
 
 // Project files option
 document.getElementById('chat-attach-project').addEventListener('click', () => {
   document.getElementById('chat-attach-menu').classList.remove('open');
-  showProjectFilePicker();
+  showProjectFilePicker('chat');
 });
 
 // Upload option
@@ -5142,6 +5324,34 @@ document.getElementById('chat-file-upload').addEventListener('change', (e) => {
     reader.readAsDataURL(file);
   });
   e.target.value = ''; // reset so same file can be picked again
+});
+
+// Sidebar attach button menu toggle
+document.getElementById('sidebar-attach-btn').addEventListener('click', () => {
+  document.getElementById('sidebar-attach-menu').classList.toggle('open');
+});
+document.getElementById('sidebar-attach-project').addEventListener('click', () => {
+  document.getElementById('sidebar-attach-menu').classList.remove('open');
+  showProjectFilePicker('sidebar');
+});
+document.getElementById('sidebar-attach-upload').addEventListener('click', () => {
+  document.getElementById('sidebar-attach-menu').classList.remove('open');
+  document.getElementById('sidebar-file-upload').click();
+});
+document.getElementById('sidebar-file-upload').addEventListener('change', (e) => {
+  const fileList = e.target.files;
+  if (!fileList) return;
+  Array.from(fileList).forEach(file => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = reader.result.split(',')[1];
+      const thumbUrl = reader.result;
+      sidebarAttachments.push({ type: 'upload', data: base64, mediaType: file.type || 'image/png', name: file.name, thumbUrl });
+      renderSidebarAttachments();
+    };
+    reader.readAsDataURL(file);
+  });
+  e.target.value = '';
 });
 
 // Topbar chat button
@@ -5166,15 +5376,6 @@ document.getElementById('chat-input').addEventListener('keydown', (e) => {
     e.target.value = '';
     sendChatMessage(text);
   }
-});
-
-// Scope toggle
-document.querySelectorAll('.chat-scope-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.chat-scope-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    chatScope = btn.dataset.scope;
-  });
 });
 
 // Suggestion buttons (initial)

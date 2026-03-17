@@ -28,7 +28,7 @@ const CONTEXT_FILE = ".context.json";
 const SETTINGS_FILE = ".annotator-settings.json";
 const SUMMARY_FILE = "SUMMARY.md";
 const SUMMARY_HISTORY_DIR = ".summary-history";
-const HIDDEN_DIRS = new Set([".thumbs", ".summary-history", ".git", ".DS_Store"]);
+const HIDDEN_DIRS = new Set([".thumbs", ".summary-history", ".git", ".DS_Store", ".attachments"]);
 const PORT = 3333;
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif", ".svg"]);
@@ -220,7 +220,7 @@ async function writeSettings(settings: Settings): Promise<void> {
 
 const pendingAskClaude = new Set<string>();
 
-async function askClaude(relPath: string, userPrompt?: string): Promise<string> {
+async function askClaude(relPath: string, userPrompt?: string, attachments?: any[]): Promise<string> {
   if (pendingAskClaude.has(relPath)) {
     throw new Error("Already analyzing this file — please wait for the current request to finish.");
   }
@@ -243,7 +243,10 @@ async function askClaude(relPath: string, userPrompt?: string): Promise<string> 
         const regionNote = c.region
           ? ` (region: ${Math.round(c.region.x)}%-${Math.round(c.region.x + c.region.w)}% x, ${Math.round(c.region.y)}%-${Math.round(c.region.y + c.region.h)}% y)`
           : "";
-        return `[${c.author}]${regionNote}: ${c.text}`;
+        const attachNote = c.attachments?.length
+          ? ` (references: ${c.attachments.map((a: any) => a.type === 'project' ? a.path : a.originalName).join(', ')})`
+          : "";
+        return `[${c.author}]${regionNote}${attachNote}: ${c.text}`;
       }).join("\n");
   }
 
@@ -310,6 +313,42 @@ ${userPrompt ? `Focus your response on answering the user's question/request: "$
 7. Do NOT use bold/header markdown formatting. Plain text with numbered points only.
 8. Keep it under 400 words. Be specific and actionable, not generic.`}`,
   });
+
+  // Process user-attached images
+  if (attachments && attachments.length > 0) {
+    for (const att of attachments) {
+      try {
+        let imageBuffer: Buffer;
+        let mediaType: string;
+        let label: string;
+        if (att.type === "project") {
+          const attPath = safePath(att.path);
+          const attExt = extname(att.path).toLowerCase();
+          mediaType = attExt === ".png" ? "image/png" : attExt === ".gif" ? "image/gif" : attExt === ".webp" ? "image/webp" : "image/jpeg";
+          let rawBuffer: Buffer;
+          if (att.region && typeof att.region.x === "number") {
+            rawBuffer = await cropRegion(attPath, att.region);
+            mediaType = "image/png";
+          } else {
+            rawBuffer = Buffer.from(await readFile(attPath));
+          }
+          imageBuffer = await resizeForApi(rawBuffer, mediaType);
+          label = att.region ? `${att.path} (crop)` : att.path;
+        } else if (att.type === "upload") {
+          mediaType = att.mediaType || "image/png";
+          imageBuffer = await resizeForApi(Buffer.from(att.data, "base64"), mediaType);
+          label = att.name || "uploaded image";
+        } else continue;
+        content.push({
+          type: "image",
+          source: { type: "base64", media_type: mediaType, data: imageBuffer.toString("base64") },
+        });
+        content.push({ type: "text", text: `[Attached by user: ${label}]` });
+      } catch (e: any) {
+        content.push({ type: "text", text: `[Failed to load attachment: ${e.message}]` });
+      }
+    }
+  }
 
   messages.push({ role: "user", content });
 
@@ -502,7 +541,10 @@ if (!existsSync(resolvedFolder)) {
 }
 
 type Region = { x: number; y: number; w: number; h: number };
-type Comment = { author: "user" | "claude"; text: string; ts: string; audio?: string; region?: Region };
+type CommentAttachment =
+  | { type: "project"; path: string }
+  | { type: "local"; path: string; originalName: string };
+type Comment = { author: "user" | "claude"; text: string; ts: string; audio?: string; region?: Region; attachments?: CommentAttachment[] };
 type FileContext = { comments: Comment[]; status: "pending" | "annotated" | "skipped"; hash?: string };
 type ContextData = Record<string, FileContext>;
 
@@ -774,7 +816,8 @@ async function generateSummary(subdir: string = "", aggregate: boolean = false):
             const regionNote = c.region
               ? ` (region: ${Math.round(c.region.x)}%-${Math.round(c.region.x + c.region.w)}% x, ${Math.round(c.region.y)}%-${Math.round(c.region.y + c.region.h)}% y)`
               : "";
-            annotationDump += `- [${c.author.toUpperCase()}, #${i}]${regionNote} ${c.text}\n`;
+            const attNote = c.attachments?.length ? ` (refs: ${c.attachments.map((a: any) => a.type === 'project' ? a.path : a.originalName).join(', ')})` : "";
+            annotationDump += `- [${c.author.toUpperCase()}, #${i}]${regionNote}${attNote} ${c.text}\n`;
           }
         } else {
           annotationDump += `\n## ${displayName} (status: ${fileCtx?.status || "pending"}) — no annotations\n`;
@@ -898,6 +941,28 @@ async function listFiles(subdir: string = ""): Promise<DirListing> {
   }
 
   return { files: files.sort(), directories: directories.sort() };
+}
+
+// Recursively list ALL files from root down
+async function listAllFiles(subdir: string = ""): Promise<{ path: string; name: string; dir: string; ext: string }[]> {
+  const results: { path: string; name: string; dir: string; ext: string }[] = [];
+  const dirPath = join(resolvedFolder, subdir);
+  if (!existsSync(dirPath)) return results;
+  const entries = await readdir(dirPath, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.name.startsWith(".") || entry.name === CONTEXT_FILE || entry.name === SUMMARY_FILE || HIDDEN_DIRS.has(entry.name)) continue;
+    if (entry.isDirectory()) {
+      const childRel = subdir ? `${subdir}/${entry.name}` : entry.name;
+      results.push(...await listAllFiles(childRel));
+    } else {
+      const ext = extname(entry.name).toLowerCase();
+      if (ALLOWED_EXTENSIONS.has(ext)) {
+        const filePath = subdir ? `${subdir}/${entry.name}` : entry.name;
+        results.push({ path: filePath, name: entry.name, dir: subdir, ext });
+      }
+    }
+  }
+  return results;
 }
 
 function json(data: unknown, status = 200): Response {
@@ -1042,6 +1107,12 @@ const server = Bun.serve({
       return json(tree);
     }
 
+    // API: list all files recursively from root
+    if (path === "/api/files-all" && req.method === "GET") {
+      const allFiles = await listAllFiles();
+      return json(allFiles);
+    }
+
     // API: orphans for a directory
     if (path === "/api/orphans" && req.method === "GET") {
       try {
@@ -1091,11 +1162,13 @@ const server = Bun.serve({
       try {
         safePath(relPath);
         let userPrompt: string | undefined;
+        let attachments: any[] | undefined;
         try {
           const body = await req.json();
           if (body?.prompt) userPrompt = body.prompt;
+          if (body?.attachments) attachments = body.attachments;
         } catch {}
-        const analysis = await askClaude(relPath, userPrompt);
+        const analysis = await askClaude(relPath, userPrompt, attachments);
         const context = await readContext(dir);
         if (!context[base]) {
           context[base] = { comments: [], status: "pending" };
@@ -1420,14 +1493,47 @@ Return ONLY your description, no labels or prefixes.`,
       return new Response(file, { headers: { "Content-Type": "audio/webm" } });
     }
 
+    // API: upload external file to .attachments/
+    if (path === "/api/attachments/upload" && req.method === "POST") {
+      try {
+        const body = (await req.json()) as { dir?: string; data: string; name: string; mediaType?: string };
+        if (!body.data || !body.name) return json({ error: "data and name required" }, 400);
+        const dir = body.dir || "";
+        const attDir = join(resolvedFolder, dir, ".attachments");
+        await mkdir(attDir, { recursive: true });
+        // Sanitize filename and make unique
+        const safeName = body.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const uniqueName = `${Date.now()}_${safeName}`;
+        const filePath = join(attDir, uniqueName);
+        const buffer = Buffer.from(body.data, "base64");
+        await writeFile(filePath, buffer);
+        const relPath = dir ? `${dir}/.attachments/${uniqueName}` : `.attachments/${uniqueName}`;
+        return json({ path: relPath, originalName: body.name });
+      } catch (e: any) {
+        return json({ error: e.message }, 500);
+      }
+    }
+
+    // API: serve attachment file
+    const attServeMatch = path.match(/^\/api\/attachments\/(.+)$/);
+    if (attServeMatch && req.method === "GET") {
+      const relPath = decodeURIComponent(attServeMatch[1]);
+      const filePath = join(resolvedFolder, relPath);
+      if (!filePath.startsWith(resolvedFolder) || !existsSync(filePath)) return json({ error: "Not found" }, 404);
+      const ext = extname(relPath).toLowerCase();
+      const mime = MIME_TYPES[ext] ?? "application/octet-stream";
+      const file = Bun.file(filePath);
+      return new Response(file, { headers: { "Content-Type": mime } });
+    }
+
     // API: add comment
     const commentMatch = path.match(/^\/api\/files\/(.+)\/comments$/);
     if (commentMatch && req.method === "POST") {
       const relPath = decodeURIComponent(commentMatch[1]);
       const { dir, base } = splitRelPath(relPath);
       try { safePath(relPath); } catch { return json({ error: "Invalid path" }, 400); }
-      const body = (await req.json()) as { author: string; text: string; audio?: string; region?: Region };
-      if (!body.text?.trim()) return json({ error: "Empty comment" }, 400);
+      const body = (await req.json()) as { author: string; text: string; audio?: string; region?: Region; attachments?: CommentAttachment[] };
+      if (!body.text?.trim() && (!body.attachments || body.attachments.length === 0)) return json({ error: "Empty comment" }, 400);
 
       const context = await readContext(dir);
       if (!context[base]) {
@@ -1441,11 +1547,12 @@ Return ONLY your description, no labels or prefixes.`,
       }
       const comment: Comment = {
         author: (body.author === "claude" ? "claude" : "user") as "user" | "claude",
-        text: body.text.trim(),
+        text: (body.text || "").trim(),
         ts: new Date().toISOString(),
       };
       if (body.audio) comment.audio = body.audio;
       if (body.region) comment.region = body.region;
+      if (body.attachments && body.attachments.length > 0) comment.attachments = body.attachments;
       context[base].comments.push(comment);
       context[base].status = "annotated";
       await writeContext(context, dir);
@@ -1838,20 +1945,17 @@ Return ONLY your description, no labels or prefixes.`,
         const body = (await req.json()) as any;
         const userMessage = body.message;
         const history = body.history || []; // array of { role, content } from prior turns
-        const scope = body.scope || "directory"; // "directory" or "all"
         const chatDir = body.dir || "";
+        const currentFile = body.currentFile || ""; // relative path of file in detail view, if any
 
         if (!userMessage) return json({ error: "message required" }, 400);
 
-        // Gather annotation context
+        // Always gather context from current directory
         let annotationDump = "";
-        const allContexts =
-          scope === "all"
-            ? await collectAllContexts(resolvedFolder, "")
-            : await collectAllContexts(
-                join(resolvedFolder, chatDir),
-                chatDir
-              );
+        const allContexts = await collectAllContexts(
+          join(resolvedFolder, chatDir),
+          chatDir
+        );
 
         for (const { dir, filename, fileCtx } of allContexts) {
           const displayName = dir ? `${dir}/${filename}` : filename;
@@ -1861,7 +1965,8 @@ Return ONLY your description, no labels or prefixes.`,
             const regionNote = c.region
               ? ` (region: ${Math.round(c.region.x)}%-${Math.round(c.region.x + c.region.w)}% x, ${Math.round(c.region.y)}%-${Math.round(c.region.y + c.region.h)}% y)`
               : "";
-            annotationDump += `- [${c.author.toUpperCase()}, #${i}]${regionNote} ${c.text}\n`;
+            const attNote = c.attachments?.length ? ` (refs: ${c.attachments.map((a: any) => a.type === 'project' ? a.path : a.originalName).join(', ')})` : "";
+            annotationDump += `- [${c.author.toUpperCase()}, #${i}]${regionNote}${attNote} ${c.text}\n`;
           }
         }
 
@@ -1869,7 +1974,7 @@ Return ONLY your description, no labels or prefixes.`,
         const textDocs = await collectTextDocuments(
           join(resolvedFolder, chatDir),
           chatDir,
-          scope === "all"
+          false
         );
         let textDocDump = "";
         for (const doc of textDocs) {
@@ -1878,10 +1983,8 @@ Return ONLY your description, no labels or prefixes.`,
 
         // Include ALL files (annotated + unannotated) in listing
         let fileListing = "\n\n## File Status Overview\n";
-        const targetDir = scope === "all" ? "" : chatDir;
-        const { files: allDirFiles } = await listFiles(targetDir);
-        const dirContext = await readContext(targetDir);
-        const annotatedFileSet = new Set(allContexts.map(c => c.filename));
+        const { files: allDirFiles } = await listFiles(chatDir);
+        const dirContext = await readContext(chatDir);
         for (const fn of allDirFiles) {
           const ctx = dirContext[fn] as any;
           const status = ctx?.status || "pending";
@@ -1890,15 +1993,37 @@ Return ONLY your description, no labels or prefixes.`,
         }
 
         // Collect thumbnails for multimodal context
-        const { blocks: chatThumbnailBlocks } = await collectThumbnails(
-          scope === "all" ? "" : chatDir,
-          scope === "all"
-        );
+        const { blocks: chatThumbnailBlocks } = await collectThumbnails(chatDir, false);
 
-        // Build system prompt with multimodal content (text + images)
+        // If viewing a specific file, include its full content
+        let currentFileContext = "";
+        if (currentFile) {
+          const cfBase = basename(currentFile);
+          const cfExt = extname(currentFile).toLowerCase();
+          currentFileContext = `\n\n## CURRENTLY VIEWING: ${currentFile}\nThe user is currently looking at this file in detail view. When they say "this file", they mean "${cfBase}".\n`;
+          // For text files, include full content
+          if (TEXT_EXTENSIONS.has(cfExt)) {
+            try {
+              const content = await readFile(safePath(currentFile), "utf-8");
+              currentFileContext += `\nFull content:\n${content.slice(0, MAX_DOC_SIZE)}\n`;
+            } catch {}
+          }
+          // For PDFs, note is available (thumbnail already in blocks)
+          if (cfExt === ".pdf") {
+            currentFileContext += `(PDF content is available via the thumbnail/document block above)\n`;
+          }
+        }
+
+        // Build system prompt
+        const viewContext = currentFile
+          ? `The user is currently viewing the file "${basename(currentFile)}" in detail view.`
+          : `The user is currently browsing the "${chatDir || "root"}" directory.`;
+
         const systemTextPrompt = `You are an assistant embedded in Context Annotator, a tool for annotating images and files from product/design sessions. You have access to all the annotations, file data, and thumbnail images for the user's project.
 
 Your job is to answer questions about the annotated files, help identify patterns, suggest next steps, and provide insights. Be specific, reference actual filenames and annotation content. Keep responses concise and useful.
+
+${viewContext} They can ask about the current file, the current directory, or any files across the entire project. Use context clues to determine what they're referring to.
 
 IMPORTANT: Annotations are your primary source of truth — they capture human intent and decisions. Thumbnail images provide additional visual context. When annotations exist for a file, weight them more heavily than your visual interpretation. For unannotated files, use the thumbnail to describe what you see.
 
@@ -1910,8 +2035,8 @@ When mentioning specific files or comments, use these special link formats so th
 - To reference a specific comment: [[comment:FILENAME#INDEX]] — e.g. [[comment:IMG_5233 2.PNG#3]] where 3 is the comment index number shown as #N in the data below
 
 Always use these link formats when referring to specific files or comments. Use the exact filenames as they appear in the data below. Do not invent filenames.
-
-## Current annotation data
+${currentFileContext}
+## Current directory annotation data
 ${annotationDump || "(No annotations found)"}
 ${fileListing}
 ${textDocDump ? `\nText documents in scope:\n${textDocDump}` : ""}`;
