@@ -214,7 +214,7 @@ async function writeSettings(settings: Settings): Promise<void> {
 
 const pendingAskClaude = new Set<string>();
 
-async function askClaude(relPath: string): Promise<string> {
+async function askClaude(relPath: string, userPrompt?: string): Promise<string> {
   if (pendingAskClaude.has(relPath)) {
     throw new Error("Already analyzing this file — please wait for the current request to finish.");
   }
@@ -255,13 +255,17 @@ async function askClaude(relPath: string): Promise<string> {
     });
   }
 
+  const userPromptSection = userPrompt
+    ? `\n\nThe user is specifically asking: "${userPrompt}"`
+    : "";
+
   content.push({
     type: "text",
-    text: `You are a technical analyst reviewing a file called "${base}" that was captured during an in-person product/design session. The user has already provided voice annotations with their own context about what this file contains.${existingContext}
+    text: `You are a technical analyst reviewing a file called "${base}" that was captured during an in-person product/design session. The user has already provided voice annotations with their own context about what this file contains.${existingContext}${userPromptSection}
 
 ${isImage ? "Look at this image carefully. Read ALL handwritten text, labels, arrows, and diagram elements." : `This is a ${ext} file.`}
 
-Your job is to ADD VALUE beyond what the user already said. Follow these rules strictly:
+${userPrompt ? `Focus your response on answering the user's question/request: "${userPrompt}". Be direct and specific.` : `Your job is to ADD VALUE beyond what the user already said. Follow these rules strictly:
 1. Start with "Implementation notes from reviewing sketch + user context:" (or similar)
 2. Use a numbered list. Keep each point to 2-3 sentences max.
 3. First, identify any specific text, labels, UI elements, or details visible in the image that the user did NOT mention.
@@ -269,7 +273,7 @@ Your job is to ADD VALUE beyond what the user already said. Follow these rules s
 5. Flag any ambiguities or open questions worth clarifying with the team.
 6. Do NOT repeat what the user already said. Do NOT give generic advice about HIPAA, competitive analysis, or best practices unless directly relevant to something visible in the image.
 7. Do NOT use bold/header markdown formatting. Plain text with numbered points only.
-8. Keep it under 400 words. Be specific and actionable, not generic.`,
+8. Keep it under 400 words. Be specific and actionable, not generic.`}`,
   });
 
   messages.push({ role: "user", content });
@@ -383,7 +387,8 @@ Content rules:
 - Skip areas already covered by existing comments
 - For text: transcribe it. For diagrams/arrows: briefly describe them.
 - One element per annotation — do not group multiple items into one large box
-- IGNORE faint text bleeding through from the back of paper`,
+- IGNORE faint text bleeding through from the back of paper
+- NEVER start descriptions with "This cropped region shows" or similar preamble. Jump straight into the substance.`,
       },
     ],
   }];
@@ -580,6 +585,74 @@ async function collectTextDocuments(dir: string, relPath: string, recursive: boo
   return results;
 }
 
+// Collect thumbnail images as base64 for multimodal API calls.
+// Returns image content blocks ready for the Claude API, plus a list of filenames included.
+async function collectThumbnails(
+  subdir: string,
+  recursive: boolean = false
+): Promise<{ blocks: any[]; fileNames: string[] }> {
+  const blocks: any[] = [];
+  const fileNames: string[] = [];
+
+  async function scanDir(absDir: string, relPath: string) {
+    try {
+      const entries = await readdir(absDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.name.startsWith(".") || HIDDEN_DIRS.has(entry.name)) continue;
+        if (entry.isDirectory()) {
+          if (recursive) {
+            const childRel = relPath ? `${relPath}/${entry.name}` : entry.name;
+            await scanDir(join(absDir, entry.name), childRel);
+          }
+          continue;
+        }
+        const ext = extname(entry.name).toLowerCase();
+        if (!IMAGE_EXTENSIONS.has(ext)) continue;
+
+        const displayName = relPath ? `${relPath}/${entry.name}` : entry.name;
+        const thumbDir = join(absDir, ".thumbs");
+        const thumbPath = join(thumbDir, `${basename(entry.name, ext)}.jpg`);
+
+        let imageData: Buffer | null = null;
+        let mediaType = "image/jpeg";
+
+        if (existsSync(thumbPath)) {
+          imageData = Buffer.from(await readFile(thumbPath));
+        } else {
+          // Generate thumbnail on-the-fly
+          const filePath = join(absDir, entry.name);
+          if (!existsSync(thumbDir)) await mkdir(thumbDir, { recursive: true });
+          const proc = Bun.spawnSync([
+            "sips", "-s", "format", "jpeg", "-s", "formatOptions", "70",
+            "-Z", "400", filePath, "--out", thumbPath,
+          ]);
+          if (proc.exitCode === 0 && existsSync(thumbPath)) {
+            imageData = Buffer.from(await readFile(thumbPath));
+          }
+        }
+
+        if (imageData) {
+          // Add a text label before the image
+          blocks.push({ type: "text", text: `[Image: ${displayName}]` });
+          blocks.push({
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: mediaType,
+              data: imageData.toString("base64"),
+            },
+          });
+          fileNames.push(displayName);
+        }
+      }
+    } catch {}
+  }
+
+  const absDir = join(resolvedFolder, subdir);
+  await scanDir(absDir, subdir);
+  return { blocks, fileNames };
+}
+
 async function generateSummary(subdir: string = "", aggregate: boolean = false): Promise<{ content: string; version: number }> {
   if (pendingGenerate) throw new Error("Summary generation already in progress.");
   pendingGenerate = true;
@@ -591,8 +664,24 @@ async function generateSummary(subdir: string = "", aggregate: boolean = false):
     let annotationDump = "";
 
     if (aggregate) {
+      // Collect all files (annotated + unannotated) across all directories
       const allContexts = await collectAllContexts(join(resolvedFolder, subdir), subdir);
-      if (allContexts.length === 0) throw new Error("No annotations to summarize.");
+      // Also scan for unannotated files in all directories
+      async function collectAllFiles(absDir: string, relPath: string): Promise<{ dir: string; filename: string }[]> {
+        const result: { dir: string; filename: string }[] = [];
+        const { files } = await listFiles(relPath);
+        for (const f of files) result.push({ dir: relPath, filename: f });
+        const entries = await readdir(absDir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (!entry.isDirectory() || entry.name.startsWith(".") || HIDDEN_DIRS.has(entry.name)) continue;
+          const childRel = relPath ? `${relPath}/${entry.name}` : entry.name;
+          result.push(...await collectAllFiles(join(absDir, entry.name), childRel));
+        }
+        return result;
+      }
+      const allFiles = await collectAllFiles(join(resolvedFolder, subdir), subdir);
+      const annotatedSet = new Set(allContexts.map(c => `${c.dir}/${c.filename}`));
+
       for (const { dir, filename, fileCtx } of allContexts) {
         const displayName = dir ? `${dir}/${filename}` : filename;
         annotationDump += `\n## ${displayName} (status: ${fileCtx.status})\n`;
@@ -604,22 +693,36 @@ async function generateSummary(subdir: string = "", aggregate: boolean = false):
           annotationDump += `- [${c.author.toUpperCase()}, #${i}]${regionNote} ${c.text}\n`;
         }
       }
-    } else {
-      const context = await readContext(subdir);
-      const fileList = Object.entries(context);
-      if (fileList.length === 0) throw new Error("No annotations to summarize.");
-      for (const [filename, fileCtx] of fileList) {
-        if (!fileCtx.comments || fileCtx.comments.length === 0) continue;
-        const displayName = subdir ? `${subdir}/${filename}` : filename;
-        annotationDump += `\n## ${displayName} (status: ${fileCtx.status})\n`;
-        for (let i = 0; i < fileCtx.comments.length; i++) {
-          const c = fileCtx.comments[i];
-          const regionNote = c.region
-            ? ` (region: ${Math.round(c.region.x)}%-${Math.round(c.region.x + c.region.w)}% x, ${Math.round(c.region.y)}%-${Math.round(c.region.y + c.region.h)}% y)`
-            : "";
-          annotationDump += `- [${c.author.toUpperCase()}, #${i}]${regionNote} ${c.text}\n`;
+      // Add unannotated files
+      for (const { dir, filename } of allFiles) {
+        const key = `${dir}/${filename}`;
+        if (!annotatedSet.has(key)) {
+          const displayName = dir ? `${dir}/${filename}` : filename;
+          annotationDump += `\n## ${displayName} (status: pending) — no annotations\n`;
         }
       }
+      if (allContexts.length === 0 && allFiles.length === 0) throw new Error("No files to summarize.");
+    } else {
+      const context = await readContext(subdir);
+      const { files } = await listFiles(subdir);
+      // Include ALL files — annotated and unannotated
+      for (const filename of files) {
+        const fileCtx = context[filename];
+        const displayName = subdir ? `${subdir}/${filename}` : filename;
+        if (fileCtx && fileCtx.comments && fileCtx.comments.length > 0) {
+          annotationDump += `\n## ${displayName} (status: ${fileCtx.status})\n`;
+          for (let i = 0; i < fileCtx.comments.length; i++) {
+            const c = fileCtx.comments[i];
+            const regionNote = c.region
+              ? ` (region: ${Math.round(c.region.x)}%-${Math.round(c.region.x + c.region.w)}% x, ${Math.round(c.region.y)}%-${Math.round(c.region.y + c.region.h)}% y)`
+              : "";
+            annotationDump += `- [${c.author.toUpperCase()}, #${i}]${regionNote} ${c.text}\n`;
+          }
+        } else {
+          annotationDump += `\n## ${displayName} (status: ${fileCtx?.status || "pending"}) — no annotations\n`;
+        }
+      }
+      if (files.length === 0 && Object.keys(context).length === 0) throw new Error("No files to summarize.");
     }
 
     const summaryPrompt = `You are synthesizing annotations from a product/design session into a comprehensive summary document. Below are all files and their annotations. Each annotation is tagged [USER] or [CLAUDE].
@@ -654,7 +757,8 @@ RULES:
    - INDEX must match the #N shown next to the comment author tag (e.g. [USER, #0] means index 0).
    - Use image references when discussing a specific file's content.
    - Every bullet point in "File-by-File Notes" and each item in "Screens and Components to Design" must include at least one comment citation.
-12. If text documents (markdown, txt files) are provided alongside annotations, use them as context to enrich your summary. Reference relevant document content where it adds clarity (e.g. "per notes.md, the team decided X"). These documents are authoritative context written by the team.`;
+12. If text documents (markdown, txt files) are provided alongside annotations, use them as context to enrich your summary. Reference relevant document content where it adds clarity (e.g. "per notes.md, the team decided X"). These documents are authoritative context written by the team.
+13. IMAGES: Thumbnail images of the files are included alongside the annotations. Use them to fill in gaps — if an image shows UI elements, layouts, or details not captured in annotations, describe what you see. However, annotations are the PRIMARY source of truth. If an annotation says something specific about a region, trust the annotation over your visual interpretation. For unannotated images, describe what you observe and flag it as "(from image, no annotations)".`;
 
     // Collect text documents from the directory
     const textDocs = await collectTextDocuments(resolvedFolder, subdir, aggregate);
@@ -666,10 +770,20 @@ RULES:
       }
     }
 
-    const prompt = `${summaryPrompt}
+    // Collect thumbnails for multimodal context
+    const { blocks: thumbnailBlocks } = await collectThumbnails(subdir, aggregate);
+
+    // Build multimodal message content
+    const textPrompt = `${summaryPrompt}
 ${docsDump ? `\nIMPORTANT: The following text documents were found alongside the images. Use them as additional context — they may contain meeting notes, requirements, project context, or domain knowledge that helps you write a better summary. Reference them where relevant.\n${docsDump}` : ""}
 ANNOTATIONS:
 ${annotationDump}`;
+
+    const messageContent: any[] = [{ type: "text", text: textPrompt }];
+    if (thumbnailBlocks.length > 0) {
+      messageContent.push({ type: "text", text: "\n\nIMAGE THUMBNAILS (for visual context — annotations take priority):" });
+      messageContent.push(...thumbnailBlocks);
+    }
 
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -681,7 +795,7 @@ ${annotationDump}`;
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
         max_tokens: 4096,
-        messages: [{ role: "user", content: prompt }],
+        messages: [{ role: "user", content: messageContent }],
       }),
     });
 
@@ -918,7 +1032,12 @@ const server = Bun.serve({
       const { dir, base } = splitRelPath(relPath);
       try {
         safePath(relPath);
-        const analysis = await askClaude(relPath);
+        let userPrompt: string | undefined;
+        try {
+          const body = await req.json();
+          if (body?.prompt) userPrompt = body.prompt;
+        } catch {}
+        const analysis = await askClaude(relPath, userPrompt);
         const context = await readContext(dir);
         if (!context[base]) {
           context[base] = { comments: [], status: "pending" };
@@ -1013,6 +1132,8 @@ const server = Bun.serve({
 Focus on:
 - If there's text: transcribe it and explain its context
 - If there's a diagram, UI element, or sketch: describe what it shows and its role in the larger image
+
+NEVER start with "This cropped region shows" or similar preamble. Jump straight into the substance — name the element, transcribe the text, or describe the action. For example: "Personalized nutrient plan with 5 supplement sliders..." not "This cropped region shows a personalized nutrient plan..."
 
 Return ONLY your description, no labels or prefixes.`,
                 },
@@ -1602,6 +1723,43 @@ Return ONLY your description, no labels or prefixes.`,
       }
     }
 
+    // API: Download specific files as zip
+    if (path === "/api/download-files" && req.method === "POST") {
+      try {
+        const body = (await req.json()) as any;
+        const filePaths: string[] = body.files || [];
+        if (filePaths.length === 0) return json({ error: "No files specified" }, 400);
+
+        const zip = new JSZip();
+        let added = 0;
+        for (const relPath of filePaths) {
+          try {
+            const absPath = safePath(relPath);
+            if (!existsSync(absPath)) continue;
+            const data = await readFile(absPath);
+            const name = relPath.includes("/") ? relPath : relPath;
+            zip.file(name, data);
+            added++;
+          } catch {}
+        }
+
+        if (added === 0) return json({ error: "No valid files found" }, 400);
+
+        const zipBuffer = await zip.generateAsync({ type: "uint8array" });
+        const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+        const filename = `files-${timestamp}.zip`;
+
+        return new Response(zipBuffer, {
+          headers: {
+            "Content-Type": "application/zip",
+            "Content-Disposition": `attachment; filename="${filename}"`,
+          },
+        });
+      } catch (e: any) {
+        return json({ error: e.message }, 500);
+      }
+    }
+
     // API: Chat — conversational Q&A about files and annotations
     if (path === "/api/chat" && req.method === "POST") {
       try {
@@ -1649,24 +1807,31 @@ Return ONLY your description, no labels or prefixes.`,
           textDocDump += `\n--- ${doc.path} ---\n${doc.content}\n`;
         }
 
-        // Also include file listing (names + status) even if no annotations
-        let fileListing = "";
-        if (scope === "all") {
-          // Just list annotated files from allContexts
-        } else {
-          const context = await readContext(chatDir);
-          const entries = Object.entries(context);
-          if (entries.length > 0) {
-            fileListing = "\n\n## File Status Overview\n";
-            for (const [fn, ctx] of entries) {
-              fileListing += `- ${fn}: ${(ctx as any).status || "pending"} (${(ctx as any).comments?.length || 0} comments)\n`;
-            }
-          }
+        // Include ALL files (annotated + unannotated) in listing
+        let fileListing = "\n\n## File Status Overview\n";
+        const targetDir = scope === "all" ? "" : chatDir;
+        const { files: allDirFiles } = await listFiles(targetDir);
+        const dirContext = await readContext(targetDir);
+        const annotatedFileSet = new Set(allContexts.map(c => c.filename));
+        for (const fn of allDirFiles) {
+          const ctx = dirContext[fn] as any;
+          const status = ctx?.status || "pending";
+          const commentCount = ctx?.comments?.length || 0;
+          fileListing += `- ${fn}: ${status} (${commentCount} comments)${commentCount === 0 ? " — unannotated" : ""}\n`;
         }
 
-        const systemPrompt = `You are an assistant embedded in Context Annotator, a tool for annotating images and files from product/design sessions. You have access to all the annotations and file data for the user's project.
+        // Collect thumbnails for multimodal context
+        const { blocks: chatThumbnailBlocks } = await collectThumbnails(
+          scope === "all" ? "" : chatDir,
+          scope === "all"
+        );
+
+        // Build system prompt with multimodal content (text + images)
+        const systemTextPrompt = `You are an assistant embedded in Context Annotator, a tool for annotating images and files from product/design sessions. You have access to all the annotations, file data, and thumbnail images for the user's project.
 
 Your job is to answer questions about the annotated files, help identify patterns, suggest next steps, and provide insights. Be specific, reference actual filenames and annotation content. Keep responses concise and useful.
+
+IMPORTANT: Annotations are your primary source of truth — they capture human intent and decisions. Thumbnail images provide additional visual context. When annotations exist for a file, weight them more heavily than your visual interpretation. For unannotated files, use the thumbnail to describe what you see.
 
 ## Reference syntax
 
@@ -1684,8 +1849,15 @@ ${textDocDump ? `\nText documents in scope:\n${textDocDump}` : ""}`;
 
         // Build messages array with history
         const messages: any[] = [];
-        // Include up to 20 turns of history
         const recentHistory = history.slice(-20);
+
+        // Inject thumbnails as a prefill user message (only on first message, not with history)
+        if (chatThumbnailBlocks.length > 0 && recentHistory.length === 0) {
+          const thumbContent: any[] = [{ type: "text", text: "Here are thumbnail images of the files in scope for visual reference:" }];
+          thumbContent.push(...chatThumbnailBlocks);
+          messages.push({ role: "user", content: thumbContent });
+          messages.push({ role: "assistant", content: "Thanks, I can see the thumbnail images. I'll use these alongside the annotation data to answer your questions. What would you like to know?" });
+        }
         for (const turn of recentHistory) {
           messages.push({ role: turn.role, content: turn.content });
         }
@@ -1733,6 +1905,29 @@ ${textDocDump ? `\nText documents in scope:\n${textDocDump}` : ""}`;
         userContent.push({ type: "text", text: userMessage });
         messages.push({ role: "user", content: userContent.length === 1 ? userMessage : userContent });
 
+        // Tool definition for smart file cards
+        const tools = [
+          {
+            name: "show_files",
+            description: "Present a collection of files to the user as a visual smart card with thumbnails and a download option. Use this when the user asks to see, find, or collect files matching certain criteria (e.g. 'show me files about nutrition', 'which files relate to the dashboard'). Only include files that actually exist in the data provided to you.",
+            input_schema: {
+              type: "object",
+              properties: {
+                files: {
+                  type: "array",
+                  items: { type: "string" },
+                  description: "Array of filenames exactly as they appear in the annotation data (e.g. 'IMG_5210.jpeg' or 'subdir/photo.jpg')"
+                },
+                description: {
+                  type: "string",
+                  description: "A short, natural description of what these files have in common (e.g. 'nutrition tracking screens', 'onboarding flow wireframes')"
+                }
+              },
+              required: ["files", "description"]
+            }
+          }
+        ];
+
         const res = await fetch("https://api.anthropic.com/v1/messages", {
           method: "POST",
           headers: {
@@ -1743,8 +1938,9 @@ ${textDocDump ? `\nText documents in scope:\n${textDocDump}` : ""}`;
           body: JSON.stringify({
             model: "claude-sonnet-4-20250514",
             max_tokens: 2048,
-            system: systemPrompt,
+            system: systemTextPrompt,
             messages,
+            tools,
           }),
         });
 
@@ -1754,8 +1950,24 @@ ${textDocDump ? `\nText documents in scope:\n${textDocDump}` : ""}`;
         }
 
         const data = (await res.json()) as any;
-        const reply = data.content[0]?.text ?? "No response";
-        return json({ reply });
+
+        // Extract text and tool_use blocks from response
+        let reply = "";
+        let fileset: { files: string[]; description: string } | null = null;
+
+        for (const block of data.content) {
+          if (block.type === "text") {
+            reply += block.text;
+          } else if (block.type === "tool_use" && block.name === "show_files") {
+            fileset = block.input as { files: string[]; description: string };
+          }
+        }
+
+        if (!reply && !fileset) reply = "No response";
+
+        const result: any = { reply };
+        if (fileset) result.fileset = fileset;
+        return json(result);
       } catch (e: any) {
         return json({ error: e.message }, 500);
       }

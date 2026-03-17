@@ -37,11 +37,11 @@
     --shadow-md: 0 2px 8px rgba(0,0,0,0.4);
     --shadow-lg: 0 4px 16px rgba(0,0,0,0.5);
     --shadow-glow: none;
-    --region-stroke: #fff;
+    --region-stroke: #00ff00;
     --region-stroke-selected: #f87171;
-    --region-label-bg: #fff;
+    --region-label-bg: #00ff00;
     --region-label-selected-bg: #f87171;
-    --region-label-text: #111;
+    --region-label-text: #000;
     --region-label-selected-text: white;
     --comment-user-color: #e0e0e0;
     --comment-claude-color: #4ade80;
@@ -97,11 +97,11 @@
       --shadow-md: 0 2px 8px rgba(0,0,0,0.08);
       --shadow-lg: 0 4px 16px rgba(0,0,0,0.1);
       --shadow-glow: none;
-      --region-stroke: #111;
+      --region-stroke: #00ff00;
       --region-stroke-selected: #dc2626;
-      --region-label-bg: #111;
+      --region-label-bg: #00ff00;
       --region-label-selected-bg: #dc2626;
-      --region-label-text: white;
+      --region-label-text: #000;
       --region-label-selected-text: white;
       --comment-user-color: #111;
       --comment-claude-color: #16a34a;
@@ -191,7 +191,11 @@
   .topbar-right {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 4px;
+  }
+  .topbar-right .btn-ghost {
+    border: none;
+    padding: 6px;
   }
   .btn {
     padding: 7px 14px;
@@ -229,11 +233,12 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    padding: 6px 20px;
+    padding: 0 20px;
+    height: 39px;
+    box-sizing: border-box;
     background: var(--bg);
     border-bottom: 1px solid var(--border);
     font-size: 12px;
-    min-height: 32px;
   }
   .breadcrumb-item {
     color: var(--text-muted);
@@ -632,11 +637,79 @@
     opacity: 0.3;
   }
   .sidebar-header {
-    padding: 16px;
+    padding: 12px 12px 12px 16px;
     border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .sidebar-header-actions {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+  }
+  .sidebar-icon-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: var(--radius);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s;
+  }
+  .sidebar-icon-btn:hover {
+    background: var(--hover-overlay);
+    color: var(--text);
+  }
+  .copy-dropdown {
+    position: relative;
+  }
+  .copy-dropdown-menu {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-sm);
+    z-index: 100;
+    min-width: 200px;
+    padding: 4px;
+  }
+  .copy-dropdown.open .copy-dropdown-menu {
+    display: block;
+  }
+  .copy-dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 10px;
+    background: none;
+    border: none;
+    color: var(--text);
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background 0.15s;
+    white-space: nowrap;
+  }
+  .copy-dropdown-item:hover {
+    background: var(--hover-overlay);
   }
   .sidebar-filename {
     font-size: 14px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-weight: 600;
     word-break: break-all;
     letter-spacing: -0.02em;
@@ -792,7 +865,7 @@
   .input-row {
     display: flex;
     gap: 8px;
-    align-items: end;
+    align-items: flex-end;
   }
   .input-wrap {
     flex: 1;
@@ -802,22 +875,23 @@
     display: block;
     width: 100%;
     margin: 0;
-    padding: 9px 36px 9px 12px;
-    background: var(--surface-2);
+    padding: 7px 36px 7px 14px;
+    background: var(--bg);
     border: 1px solid var(--border-strong);
     border-radius: var(--radius);
     color: var(--text);
     font-size: 13px;
     line-height: 20px;
+    min-height: 36px;
     font-family: inherit;
     resize: none;
     box-sizing: border-box;
     overflow: hidden;
     field-sizing: content;
-    transition: all 0.2s;
+    outline: none;
+    transition: border-color 0.15s;
   }
   .comment-input:focus {
-    outline: none;
     border-color: var(--text-muted);
   }
   .comment-input::placeholder { color: var(--text-subtle); }
@@ -825,8 +899,7 @@
   .btn-mic {
     position: absolute;
     right: 6px;
-    top: 50%;
-    transform: translateY(-50%);
+    bottom: 4px;
     width: 28px;
     height: 28px;
     border-radius: 50%;
@@ -847,9 +920,9 @@
   }
 
   .btn-send {
-    width: 38px;
-    min-width: 38px;
-    height: 38px;
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
     border-radius: var(--radius);
     border: none;
     background: var(--accent);
@@ -877,42 +950,6 @@
   .voice-status.recording { color: var(--red); }
 
 
-  .sidebar-tools {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 3px;
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px solid var(--border);
-    flex-wrap: wrap;
-  }
-  .tool-link {
-    background: none;
-    border: none;
-    color: var(--text-muted);
-    font-size: 11px;
-    font-family: inherit;
-    cursor: pointer;
-    padding: 3px 6px;
-    border-radius: 4px;
-    transition: color 0.15s, background 0.15s;
-  }
-  .tool-link:hover {
-    color: var(--text);
-    background: var(--surface-2);
-  }
-  .tool-link.claude { color: var(--text); font-weight: 500; }
-  .tool-link.claude:hover { background: var(--surface-2); }
-  .tool-link.annotate { color: var(--text-muted); }
-  .tool-link.annotate:hover { color: var(--text); background: var(--surface-2); }
-  .tool-link:disabled { opacity: 0.4; cursor: not-allowed; }
-  .tool-link.loading { animation: pulse 1s ease-in-out infinite; }
-  .tool-sep {
-    color: var(--border);
-    font-size: 10px;
-    user-select: none;
-  }
 
   /* ── Settings Modal ── */
   .modal-overlay {
@@ -962,28 +999,33 @@
 
   /* ── Summary Siderail ── */
   .overview-container {
-    display: flex;
-    height: calc(100vh - 56px - 32px);
-  }
-  .overview-container .overview {
-    flex: 1;
-    min-width: 0;
-    height: auto;
+    height: calc(100vh - 56px - 39px);
     overflow-y: auto;
   }
   .overview-container.hidden { display: none; }
   .summary-siderail {
     width: 420px;
-    min-width: 420px;
+    position: fixed;
+    top: 0;
+    right: 0;
+    height: 100vh;
     background: var(--surface);
-    border-left: 1px solid var(--border);
-    display: none;
+    box-shadow: -1px 0 0 var(--border);
+    display: flex;
     flex-direction: column;
-    height: calc(100vh - 56px - 32px);
+    z-index: 50;
+    transform: translateX(100%);
+    transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
   }
-  .summary-siderail.active { display: flex; }
+  .summary-siderail.active { transform: translateX(0); }
+  body.summary-open .topbar,
+  body.summary-open .breadcrumb-bar,
+  body.summary-open .orphan-banner,
+  body.summary-open .overview-container,
+  body.summary-open .gallery { margin-right: 420px; }
   .summary-header {
-    padding: 12px 16px;
+    padding: 0 16px;
+    height: 56px;
     border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
@@ -1091,7 +1133,83 @@
     color: var(--text-muted);
     font-size: 13px;
     text-align: center;
-    padding: 40px 20px;
+    padding: 80px 32px 60px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
+  .summary-empty-icon {
+    color: var(--text-subtle);
+    margin-bottom: 8px;
+  }
+  .summary-empty-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .summary-empty-desc {
+    font-size: 13px;
+    color: var(--text-muted);
+    line-height: 1.5;
+    max-width: 280px;
+    margin-bottom: 14px;
+  }
+  .summary-empty-buttons {
+    display: flex;
+    gap: 8px;
+  }
+  .summary-empty-buttons .btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .summary-version-dropdown,
+  .summary-regen-dropdown {
+    position: relative;
+  }
+  .summary-version-menu,
+  .summary-regen-menu {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-sm);
+    z-index: 100;
+    min-width: 160px;
+    padding: 4px;
+  }
+  .summary-version-dropdown.open .summary-version-menu,
+  .summary-regen-dropdown.open .summary-regen-menu {
+    display: block;
+  }
+  .summary-version-item,
+  .summary-regen-item {
+    display: block;
+    width: 100%;
+    padding: 8px 10px;
+    background: none;
+    border: none;
+    color: var(--text);
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    border-radius: 4px;
+    text-align: left;
+    transition: background 0.15s;
+    white-space: nowrap;
+  }
+  .summary-version-item:hover,
+  .summary-regen-item:hover {
+    background: var(--hover-overlay);
+  }
+  .summary-version-item.active {
+    color: var(--accent);
+    font-weight: 600;
   }
   .summary-loading {
     display: flex;
@@ -1141,36 +1259,6 @@
   .shimmer-line:nth-child(3) { width: 70%; }
   .shimmer-line:nth-child(4) { width: 90%; }
   @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
-  .summary-footer {
-    padding: 12px 16px;
-    border-top: 1px solid var(--border);
-    display: flex;
-    gap: 8px;
-    flex-shrink: 0;
-  }
-  .summary-footer .btn { flex: 0 0 auto; }
-  .version-nav {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .version-btn {
-    padding: 2px 8px !important;
-    font-size: 16px !important;
-    line-height: 1;
-    min-width: 28px;
-  }
-  .version-btn:disabled {
-    opacity: 0.3;
-    cursor: default;
-  }
-  .version-label {
-    font-size: 11px;
-    color: var(--text-muted);
-    white-space: nowrap;
-    user-select: none;
-  }
 
   /* ── Chat Panel ── */
   /* ── Chat Right Panel ── */
@@ -1181,9 +1269,9 @@
     border-left: 1px solid var(--border);
     display: flex;
     flex-direction: column;
-    height: calc(100vh - 56px);
+    height: 100vh;
     position: fixed;
-    top: 56px;
+    top: 0;
     right: 0;
     z-index: 50;
     transform: translateX(100%);
@@ -1195,9 +1283,15 @@
     transform: translateX(0);
     pointer-events: auto;
   }
-  /* Push content when chat is open */
+  /* Push all content when chat is open */
+  .topbar,
+  .breadcrumb-bar,
+  .orphan-banner,
   .overview-container,
   .gallery { transition: margin-right 0.35s cubic-bezier(0.16, 1, 0.3, 1); }
+  body.chat-open .topbar,
+  body.chat-open .breadcrumb-bar,
+  body.chat-open .orphan-banner,
   body.chat-open .overview-container,
   body.chat-open .gallery { margin-right: 420px; }
 
@@ -1205,7 +1299,9 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 8px 12px;
+    padding: 0 12px;
+    height: 39px;
+    box-sizing: border-box;
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
     background: var(--bg);
@@ -1262,7 +1358,8 @@
   .chat-delete-chat:hover { color: var(--red); }
 
   .chat-header {
-    padding: 14px 16px;
+    padding: 0 16px;
+    height: 56px;
     border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
@@ -1464,6 +1561,19 @@
     position: relative;
   }
   .chat-copy-all:hover { background: var(--hover-overlay); color: var(--text); }
+  .chat-close-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s;
+  }
+  .chat-close-btn:hover { background: var(--hover-overlay); color: var(--text); }
   .chat-copy-all-tooltip {
     position: absolute;
     bottom: -26px;
@@ -1481,6 +1591,116 @@
     transition: opacity 0.15s;
   }
   .chat-copy-all-tooltip.show { opacity: 1; }
+
+  /* Smart file card */
+  .chat-fileset {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    margin-top: 8px;
+    animation: chatMsgIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  .chat-fileset-thumbs {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+  }
+  .chat-fileset-thumb {
+    width: 64px;
+    height: 64px;
+    border-radius: 8px;
+    object-fit: cover;
+    border: 1px solid var(--border);
+    background: var(--surface-3);
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.15s;
+  }
+  .chat-fileset-thumb:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+  }
+  .chat-fileset-overflow {
+    width: 64px;
+    height: 64px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface-3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .chat-fileset-overflow:hover {
+    background: var(--surface-2);
+    border-color: var(--border-strong);
+    color: var(--text);
+  }
+  .chat-fileset-thumb.hidden-thumb {
+    display: none;
+  }
+  .chat-fileset.expanded .chat-fileset-thumb.hidden-thumb {
+    display: block;
+  }
+  .chat-fileset.expanded .chat-fileset-overflow {
+    width: auto;
+    height: auto;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .chat-fileset-info {
+    margin-bottom: 12px;
+  }
+  .chat-fileset-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 2px;
+  }
+  .chat-fileset-files {
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.4;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .chat-fileset-download {
+    width: 100%;
+    padding: 9px 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    font-family: inherit;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .chat-fileset-download:hover {
+    background: var(--surface-2);
+    border-color: var(--border-strong);
+  }
+  .chat-fileset-download:active {
+    transform: scale(0.98);
+  }
+  .chat-fileset-download.downloading {
+    opacity: 0.6;
+    pointer-events: none;
+  }
+
   .chat-ref {
     display: inline-flex;
     align-items: center;
@@ -1550,7 +1770,7 @@
   }
   .chat-input {
     flex: 1;
-    padding: 10px 14px;
+    padding: 7px 14px;
     background: var(--bg);
     border: 1px solid var(--border-strong);
     border-radius: var(--radius);
@@ -1558,6 +1778,7 @@
     font-size: 13px;
     font-family: inherit;
     line-height: 20px;
+    min-height: 36px;
     resize: none;
     outline: none;
     box-sizing: border-box;
@@ -1760,18 +1981,16 @@
     <span class="topbar-folder" id="folder-path">Loading...</span>
   </div>
   <div class="topbar-right">
-    <button class="btn btn-ghost" id="btn-toggle-summary">Summary</button>
+    <button class="btn btn-ghost" id="btn-settings" title="API Key"><i class="ph ph-key" style="font-size:18px"></i></button>
     <div class="export-wrapper" style="position:relative;display:inline-block">
-      <button class="btn btn-ghost" id="btn-export">Export</button>
+      <button class="btn btn-ghost" id="btn-export" title="Export"><i class="ph ph-export" style="font-size:18px"></i></button>
       <div class="export-dropdown" id="export-dropdown" style="display:none">
         <button class="export-option" id="export-file" style="display:none">This Image</button>
         <button class="export-option" id="export-dir">This Directory</button>
         <button class="export-option" id="export-root">Everything</button>
       </div>
     </div>
-    <button class="btn btn-primary" id="btn-add-context">Add Context</button>
-    <button class="btn btn-ghost" id="btn-back" style="display:none">Back to Grid</button>
-    <button class="btn btn-ghost" id="btn-settings" title="API Key"><i class="ph ph-key" style="font-size:18px"></i></button>
+    <button class="btn btn-ghost" id="btn-toggle-summary" title="Summary"><i class="ph ph-file-text" style="font-size:18px"></i></button>
     <button class="btn btn-ghost" id="btn-chat" title="Chat with Claude"><i class="ph ph-sparkle" style="font-size:18px"></i></button>
   </div>
 </div>
@@ -1787,7 +2006,7 @@
   <button id="btn-reconcile" onclick="reconcileFiles()">Reconcile</button>
 </div>
 
-<!-- Overview + Summary Siderail Container -->
+<!-- Overview Container -->
 <div class="overview-container" id="overview-container">
   <div class="overview" id="overview">
     <div class="filter-bar">
@@ -1795,26 +2014,43 @@
     </div>
     <div class="grid" id="grid"></div>
   </div>
-  <div class="summary-siderail" id="summary-siderail">
-    <div class="summary-header">
-      <span class="summary-header-title">Summary</span>
-      <div class="summary-header-actions">
-        <button class="btn btn-ghost" id="btn-summary-edit" style="padding:4px 10px;font-size:12px">Edit</button>
-        <button class="btn btn-ghost" id="btn-summary-copy" style="padding:4px 10px;font-size:12px">Copy</button>
+</div>
+
+<!-- Summary Panel -->
+<div class="summary-siderail" id="summary-siderail">
+  <div class="summary-header">
+    <span class="summary-header-title">Summary</span>
+    <div class="summary-header-actions">
+      <button class="sidebar-icon-btn summary-has-content" id="btn-summary-edit" title="Edit" style="display:none">
+        <i class="ph ph-pencil-simple" style="font-size:16px"></i>
+      </button>
+      <button class="sidebar-icon-btn summary-has-content" id="btn-summary-copy" title="Copy" style="display:none">
+        <i class="ph ph-copy" style="font-size:16px"></i>
+      </button>
+      <div class="summary-version-dropdown summary-has-content" id="summary-version-dropdown" style="display:none">
+        <button class="sidebar-icon-btn" id="btn-version-toggle" title="Version history">
+          <i class="ph ph-clock-counter-clockwise" style="font-size:16px"></i>
+        </button>
+        <div class="summary-version-menu" id="summary-version-menu">
+          <div class="summary-version-list" id="summary-version-list"></div>
+        </div>
       </div>
-    </div>
-    <div class="summary-content" id="summary-content">
-      <div class="summary-empty">No summary yet. Click "Generate" to create one.</div>
-    </div>
-    <div class="summary-footer">
-      <div class="version-nav" id="version-nav" style="display:none">
-        <button class="btn btn-ghost version-btn" id="btn-version-prev" title="Previous version">&lsaquo;</button>
-        <span class="version-label" id="version-label">v1 of 1</span>
-        <button class="btn btn-ghost version-btn" id="btn-version-next" title="Next version">&rsaquo;</button>
+      <div class="summary-regen-dropdown summary-has-content" id="summary-regen-dropdown" style="display:none">
+        <button class="sidebar-icon-btn" id="btn-regenerate-toggle" title="Resummarize">
+          <i class="ph ph-arrow-clockwise" style="font-size:16px"></i>
+        </button>
+        <div class="summary-regen-menu" id="summary-regen-menu">
+          <button class="summary-regen-item" id="btn-regen-dir">Summarize this directory</button>
+          <button class="summary-regen-item" id="btn-regen-all">Summarize all subdirectories</button>
+        </div>
       </div>
-      <button class="btn btn-ghost" id="btn-generate-aggregate" style="display:none;padding:4px 10px;font-size:12px">Generate All</button>
-      <button class="btn btn-primary" id="btn-generate-summary">Generate</button>
+      <button class="sidebar-icon-btn" id="btn-summary-close" title="Close summary">
+        <i class="ph ph-x" style="font-size:16px"></i>
+      </button>
     </div>
+  </div>
+  <div class="summary-content" id="summary-content">
+    <div class="summary-empty">No summary yet. Click "Generate" to create one.</div>
   </div>
 </div>
 
@@ -1829,7 +2065,7 @@
         <i class="ph ph-eye" style="font-size:18px"></i>
       </button>
       <button class="canvas-tool-btn" id="btn-auto-annotate" title="Auto-annotate with Claude">
-        <i class="ph ph-robot" style="font-size:18px"></i>
+        <i class="ph ph-sparkle" style="font-size:18px"></i>
       </button>
       <button class="canvas-tool-btn" id="btn-rotate-ccw" title="Rotate left [">
         <i class="ph ph-arrow-counter-clockwise" style="font-size:18px"></i>
@@ -1843,6 +2079,27 @@
     <div class="sidebar-resize-handle" id="sidebar-resize-handle"></div>
     <div class="sidebar-header">
       <div class="sidebar-filename" id="sidebar-filename"></div>
+      <div class="sidebar-header-actions">
+        <div class="copy-dropdown" id="copy-dropdown">
+          <button class="sidebar-icon-btn" id="btn-copy-menu" title="Copy image">
+            <i class="ph ph-copy" style="font-size:16px"></i>
+          </button>
+
+          <div class="copy-dropdown-menu" id="copy-dropdown-menu">
+            <button class="copy-dropdown-item" id="btn-copy-image">
+              <i class="ph ph-image" style="font-size:14px"></i>
+              Copy image
+            </button>
+            <button class="copy-dropdown-item" id="btn-copy-context">
+              <i class="ph ph-image-square" style="font-size:14px"></i>
+              Copy image + annotations
+            </button>
+          </div>
+        </div>
+        <button class="sidebar-icon-btn" id="btn-back" title="Close">
+          <i class="ph ph-x" style="font-size:16px"></i>
+        </button>
+      </div>
     </div>
     <div class="comments-list" id="comments-list"></div>
     <div class="sidebar-input">
@@ -1856,17 +2113,6 @@
         </button>
       </div>
       <div class="voice-status" id="voice-status"></div>
-      <div class="sidebar-tools">
-        <button class="tool-link claude" id="btn-ask-claude">Ask Claude</button>
-        <span class="tool-sep">&middot;</span>
-        <button class="tool-link" id="btn-copy-image" title="Copy plain image to clipboard">
-          <i class="ph ph-copy" style="font-size:14px"></i>
-        </button>
-        <span class="tool-sep">&middot;</span>
-        <button class="tool-link" id="btn-copy-context" title="Copy image + comments to clipboard">
-          <i class="ph ph-image-square" style="font-size:14px"></i>
-        </button>
-      </div>
     </div>
   </div>
 </div>
@@ -1875,20 +2121,20 @@
 <div class="chat-panel" id="chat-panel">
   <div class="chat-header">
     <div class="chat-header-left">
-      <div class="chat-header-icon">
-        <i class="ph ph-sparkle" style="font-size:16px;color:var(--chat-icon-fill)"></i>
+      <span class="chat-header-title">Chat with</span>
+      <div class="chat-scope-toggle">
+        <button class="chat-scope-btn active" data-scope="directory">This Folder</button>
+        <button class="chat-scope-btn" data-scope="all">All Folders</button>
       </div>
-      <span class="chat-header-title">Chat</span>
     </div>
     <div style="display:flex;align-items:center;gap:8px">
       <button class="chat-copy-all" id="chat-copy-all" title="Copy entire conversation">
         <i class="ph ph-copy" style="font-size:14px"></i>
         <span class="chat-copy-all-tooltip" id="chat-copy-all-tooltip">Copied!</span>
       </button>
-      <div class="chat-scope-toggle">
-        <button class="chat-scope-btn active" data-scope="directory">This Folder</button>
-        <button class="chat-scope-btn" data-scope="all">All Folders</button>
-      </div>
+      <button class="chat-close-btn" id="chat-close-btn" title="Close chat">
+        <i class="ph ph-x" style="font-size:16px"></i>
+      </button>
     </div>
   </div>
   <div class="chat-history-bar" id="chat-history-bar">
@@ -2150,9 +2396,7 @@ function enterGallery(onRendered) {
   document.getElementById('gallery').classList.add('active');
   document.getElementById('breadcrumb-bar').style.display = 'none';
   document.getElementById('orphan-banner').classList.remove('active');
-  document.getElementById('btn-add-context').style.display = 'none';
   document.getElementById('btn-toggle-summary').style.display = 'none';
-  document.getElementById('btn-back').style.display = '';
   updateChatFabVisibility();
   renderGalleryItem().then(() => {
     if (onRendered) onRendered();
@@ -2164,9 +2408,7 @@ function exitGallery() {
   document.getElementById('overview-container').classList.remove('hidden');
   document.getElementById('gallery').classList.remove('active');
   document.getElementById('breadcrumb-bar').style.display = '';
-  document.getElementById('btn-add-context').style.display = '';
   document.getElementById('btn-toggle-summary').style.display = '';
-  document.getElementById('btn-back').style.display = 'none';
   updateChatFabVisibility();
   loadFiles();
 }
@@ -3325,9 +3567,14 @@ document.getElementById('export-root').addEventListener('click', () => {
 });
 
 // ── Event Listeners ──
-document.getElementById('btn-add-context').addEventListener('click', startAddContext);
 document.getElementById('btn-back').addEventListener('click', exitGallery);
-document.getElementById('btn-add-comment').addEventListener('click', addComment);
+document.getElementById('btn-add-comment').addEventListener('click', (e) => {
+  if (e.altKey) {
+    askClaudeForFile();
+  } else {
+    addComment();
+  }
+});
 document.getElementById('nav-prev').addEventListener('click', goPrev);
 document.getElementById('nav-next').addEventListener('click', goNext);
 document.getElementById('btn-rotate-ccw').addEventListener('click', () => rotateCanvas(-90));
@@ -3340,6 +3587,11 @@ document.getElementById('btn-toggle-annotations').addEventListener('click', () =
 
 // Comment input: Enter to submit (Shift+Enter for newline); empty input + staged region → Ask Claude
 document.getElementById('comment-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.altKey) {
+    e.preventDefault();
+    askClaudeForFile();
+    return;
+  }
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     const hasText = document.getElementById('comment-input').value.trim();
@@ -3348,6 +3600,22 @@ document.getElementById('comment-input').addEventListener('keydown', (e) => {
     } else if (stagedRegion) {
       describeRegionWithClaude();
     }
+  }
+});
+
+// Alt key: swap send button icon to sparkle while held
+const sendBtnIcon = '<i class="ph ph-paper-plane-tilt" style="font-size:18px"></i>';
+const claudeIcon = '<i class="ph ph-sparkle" style="font-size:18px"></i>';
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Alt') {
+    const btn = document.getElementById('btn-add-comment');
+    if (btn && !btn.disabled) btn.innerHTML = claudeIcon;
+  }
+});
+document.addEventListener('keyup', (e) => {
+  if (e.key === 'Alt') {
+    const btn = document.getElementById('btn-add-comment');
+    if (btn && !btn.disabled) btn.innerHTML = sendBtnIcon;
   }
 });
 
@@ -3578,12 +3846,7 @@ async function checkApiKey() {
 }
 
 function updateAskClaudeButton() {
-  const btn = document.getElementById('btn-ask-claude');
-  if (!hasApiKey) {
-    btn.textContent = 'Ask Claude (set API key)';
-  } else {
-    btn.textContent = 'Ask Claude';
-  }
+  // No-op — Ask Claude is now triggered via Cmd+Enter
 }
 
 document.getElementById('btn-settings').addEventListener('click', async () => {
@@ -3613,8 +3876,8 @@ document.getElementById('settings-modal').addEventListener('click', (e) => {
   }
 });
 
-// ── Ask Claude ──
-document.getElementById('btn-ask-claude').addEventListener('click', async () => {
+// ── Ask Claude (triggered via Alt+Enter or Alt+click send) ──
+async function askClaudeForFile() {
   if (!hasApiKey) {
     document.getElementById('btn-settings').click();
     return;
@@ -3622,26 +3885,36 @@ document.getElementById('btn-ask-claude').addEventListener('click', async () => 
   const file = onlyFiles()[currentIndex];
   if (!file) return;
 
-  const btn = document.getElementById('btn-ask-claude');
-  btn.disabled = true;
-  btn.textContent = 'Thinking...';
-  btn.classList.add('loading');
+  const input = document.getElementById('comment-input');
+  const prompt = input.value.trim();
+
+  // Show loading state on send button
+  const sendBtn = document.getElementById('btn-add-comment');
+  const originalHtml = sendBtn.innerHTML;
+  sendBtn.disabled = true;
+  sendBtn.innerHTML = '<i class="ph ph-spinner" style="font-size:18px;animation:spin 1s linear infinite"></i>';
+
+  // Clear input
+  if (prompt) {
+    input.value = '';
+    input.style.height = 'auto';
+  }
 
   try {
-    const res = await api(`/api/files/${encodeURIComponent(file.path)}/ask-claude`, { method: 'POST' });
+    const body = prompt ? { prompt } : undefined;
+    const res = await api(`/api/files/${encodeURIComponent(file.path)}/ask-claude`, { method: 'POST', body });
     if (res.error) {
       alert('Error: ' + res.error);
     }
   } catch (e) {
     alert('Failed to reach Claude: ' + e.message);
   } finally {
-    btn.disabled = false;
-    btn.textContent = 'Ask Claude';
-    btn.classList.remove('loading');
+    sendBtn.disabled = false;
+    sendBtn.innerHTML = originalHtml;
     await reloadCurrentDir();
     refreshSidebar();
   }
-});
+}
 
 // ── Auto-Annotate ──
 document.getElementById('btn-auto-annotate').addEventListener('click', async () => {
@@ -3706,11 +3979,24 @@ function wrapText(ctx, text, maxWidth) {
   return lines;
 }
 
+// ── Copy Dropdown Toggle ──
+document.getElementById('btn-copy-menu').addEventListener('click', (e) => {
+  e.stopPropagation();
+  document.getElementById('copy-dropdown').classList.toggle('open');
+});
+document.addEventListener('click', (e) => {
+  const dd = document.getElementById('copy-dropdown');
+  if (dd && !dd.contains(e.target)) {
+    dd.classList.remove('open');
+  }
+});
+
 // ── Copy (plain image) ──
 document.getElementById('btn-copy-image').addEventListener('click', async () => {
+  document.getElementById('copy-dropdown').classList.remove('open');
   const file = onlyFiles()[currentIndex];
   if (!file) return;
-  const btn = document.getElementById('btn-copy-image');
+  const btn = document.getElementById('btn-copy-menu');
   const originalHtml = btn.innerHTML;
   btn.style.opacity = '0.5';
   btn.disabled = true;
@@ -3734,9 +4020,10 @@ document.getElementById('btn-copy-image').addEventListener('click', async () => 
 
 // ── Copy+ (annotated image with comment legend) ──
 document.getElementById('btn-copy-context').addEventListener('click', async () => {
+  document.getElementById('copy-dropdown').classList.remove('open');
   const file = onlyFiles()[currentIndex];
   if (!file) return;
-  const btn = document.getElementById('btn-copy-context');
+  const btn = document.getElementById('btn-copy-menu');
   const originalHtml = btn.innerHTML;
   btn.style.opacity = '0.5';
   btn.disabled = true;
@@ -3946,8 +4233,35 @@ function fixCitationLinks(md) {
 
 function renderSummary() {
   const el = document.getElementById('summary-content');
-  if (!summaryRawContent) {
-    el.innerHTML = '<div class="summary-empty">No summary yet. Click "Generate" to create one.</div>';
+  const hasContent = !!summaryRawContent;
+
+  // Show/hide header buttons that require content
+  document.querySelectorAll('.summary-has-content').forEach(btn => {
+    btn.style.display = hasContent ? '' : 'none';
+  });
+
+  if (!hasContent) {
+    const hasDirs = onlyDirs().length > 0;
+    const dirName = currentDir ? currentDir.split('/').pop() : 'root';
+    el.innerHTML = `<div class="summary-empty">
+      <div class="summary-empty-icon"><i class="ph ph-file-text" style="font-size:40px"></i></div>
+      <div class="summary-empty-title">No summary yet</div>
+      <div class="summary-empty-desc">Summarize all annotations${hasDirs ? ' in this directory' : ''} using Claude.</div>
+      <div class="summary-empty-buttons">
+        <button class="btn btn-primary" id="btn-generate-empty">
+          <i class="ph ph-sparkle" style="font-size:14px"></i>
+          Summarize ${escapeHtml(dirName)} directory
+        </button>
+      </div>
+      ${hasDirs ? `<div class="summary-empty-buttons">
+        <button class="btn btn-ghost" id="btn-generate-all-empty">
+          <i class="ph ph-folders" style="font-size:14px"></i>
+          Summarize all subdirectories
+        </button>
+      </div>` : ''}
+    </div>`;
+    document.getElementById('btn-generate-empty')?.addEventListener('click', () => generateSummaryAction(false));
+    document.getElementById('btn-generate-all-empty')?.addEventListener('click', () => generateSummaryAction(true));
     return;
   }
   if (summaryEditMode) {
@@ -3959,23 +4273,44 @@ function renderSummary() {
   }
 }
 
+function closeSummaryInstant() {
+  summaryVisible = false;
+  const rail = document.getElementById('summary-siderail');
+  rail.classList.remove('active');
+  document.body.classList.remove('summary-open');
+  document.getElementById('btn-toggle-summary').style.display = '';
+}
+
 function toggleSummary() {
   summaryVisible = !summaryVisible;
   const rail = document.getElementById('summary-siderail');
   const btn = document.getElementById('btn-toggle-summary');
   if (summaryVisible) {
-    rail.classList.add('active');
-    btn.classList.add('btn-primary');
-    btn.classList.remove('btn-ghost');
+    // Instant swap if chat is open
+    if (chatOpen) {
+      const chatPanel = document.getElementById('chat-panel');
+      rail.style.transition = 'none';
+      chatPanel.style.transition = 'none';
+      closeChatInstant();
+      rail.classList.add('active');
+      document.body.classList.add('summary-open');
+      btn.style.display = 'none';
+      // Re-enable transitions next frame
+      requestAnimationFrame(() => {
+        rail.style.transition = '';
+        chatPanel.style.transition = '';
+      });
+    } else {
+      rail.classList.add('active');
+      document.body.classList.add('summary-open');
+      btn.style.display = 'none';
+    }
     loadSummary();
     loadVersionList();
-    // Show aggregate button only when there are subdirectories
-    const hasDirs = onlyDirs().length > 0;
-    document.getElementById('btn-generate-aggregate').style.display = hasDirs ? '' : 'none';
   } else {
     rail.classList.remove('active');
-    btn.classList.remove('btn-primary');
-    btn.classList.add('btn-ghost');
+    document.body.classList.remove('summary-open');
+    btn.style.display = '';
   }
 }
 
@@ -3989,11 +4324,13 @@ function toggleSummaryEdit() {
       api(`/api/summary${dirParam}`, { method: 'POST', body: { content: summaryRawContent } });
     }
     summaryEditMode = false;
-    editBtn.textContent = 'Edit';
+    editBtn.innerHTML = '<i class="ph ph-pencil-simple" style="font-size:16px"></i>';
+    editBtn.title = 'Edit';
     renderSummary();
   } else {
     summaryEditMode = true;
-    editBtn.textContent = 'Done';
+    editBtn.innerHTML = '<i class="ph ph-check" style="font-size:16px"></i>';
+    editBtn.title = 'Done editing';
     renderSummary();
     const editor = document.getElementById('summary-editor');
     if (editor) editor.focus();
@@ -4004,8 +4341,9 @@ function copySummary() {
   if (!summaryRawContent) return;
   navigator.clipboard.writeText(summaryRawContent).then(() => {
     const btn = document.getElementById('btn-summary-copy');
-    btn.textContent = 'Copied';
-    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+    const originalHtml = btn.innerHTML;
+    btn.innerHTML = '<i class="ph ph-check" style="font-size:16px"></i>';
+    setTimeout(() => { btn.innerHTML = originalHtml; }, 1500);
   });
 }
 
@@ -4014,18 +4352,15 @@ async function generateSummaryAction(aggregate = false) {
     document.getElementById('btn-settings').click();
     return;
   }
-  const btn = aggregate ? document.getElementById('btn-generate-aggregate') : document.getElementById('btn-generate-summary');
-  if (!btn) return;
-  btn.disabled = true;
-  btn.textContent = 'Generating...';
 
-  // Also disable the other generate button
-  const otherBtn = aggregate ? document.getElementById('btn-generate-summary') : document.getElementById('btn-generate-aggregate');
-  if (otherBtn) otherBtn.disabled = true;
+  // Close regen dropdown if open
+  const regenDd = document.getElementById('summary-regen-dropdown');
+  if (regenDd) regenDd.classList.remove('open');
 
   // Show loading state in summary content area
   const el = document.getElementById('summary-content');
-  const scope = aggregate ? 'all directories' : (currentDir || 'root');
+  const dirName = currentDir ? currentDir.split('/').pop() : 'root';
+  const scope = aggregate ? 'all subdirectories' : `${dirName} directory`;
   const steps = [
     'Reading annotations...',
     'Scanning text documents...',
@@ -4037,7 +4372,7 @@ async function generateSummaryAction(aggregate = false) {
     <div class="summary-loading">
       <div class="summary-loading-spinner"></div>
       <div class="summary-loading-text">
-        Generating summary for <strong>${escapeHtml(scope)}</strong>
+        Summarizing <strong>${escapeHtml(scope)}</strong>
         <div class="summary-loading-step" id="loading-step">${steps[0]}</div>
       </div>
       <div class="summary-loading-shimmer">
@@ -4073,29 +4408,27 @@ async function generateSummaryAction(aggregate = false) {
       updateVersionNav();
     }
   } catch (e) {
-    alert('Failed to generate summary: ' + e.message);
+    alert('Failed to summarize: ' + e.message);
     renderSummary();
   } finally {
     clearInterval(stepInterval);
-    btn.disabled = false;
-    btn.textContent = aggregate ? 'Generate All' : 'Generate';
-    if (otherBtn) otherBtn.disabled = false;
   }
 }
 
 function updateVersionNav() {
-  const nav = document.getElementById('version-nav');
-  const label = document.getElementById('version-label');
-  const prevBtn = document.getElementById('btn-version-prev');
-  const nextBtn = document.getElementById('btn-version-next');
-  if (summaryTotalVersions > 0) {
-    nav.style.display = '';
-    label.textContent = `v${summaryCurrentVersion} of ${summaryTotalVersions}`;
-    prevBtn.disabled = summaryCurrentVersion <= 1;
-    nextBtn.disabled = summaryCurrentVersion >= summaryTotalVersions;
-  } else {
-    nav.style.display = 'none';
+  // Populate version dropdown list
+  const list = document.getElementById('summary-version-list');
+  if (!list) return;
+  if (summaryTotalVersions <= 0) {
+    list.innerHTML = '<div style="padding:8px 10px;color:var(--text-muted);font-size:12px">No versions yet</div>';
+    return;
   }
+  let html = '';
+  for (let v = summaryTotalVersions; v >= 1; v--) {
+    const isActive = v === summaryCurrentVersion;
+    html += `<button class="summary-version-item${isActive ? ' active' : ''}" data-version="${v}">Version ${v}${v === summaryTotalVersions ? ' (latest)' : ''}</button>`;
+  }
+  list.innerHTML = html;
 }
 
 async function loadVersion(version) {
@@ -4124,15 +4457,39 @@ async function loadVersionList() {
 }
 
 document.getElementById('btn-toggle-summary').addEventListener('click', toggleSummary);
+document.getElementById('btn-summary-close').addEventListener('click', toggleSummary);
 document.getElementById('btn-summary-edit').addEventListener('click', toggleSummaryEdit);
 document.getElementById('btn-summary-copy').addEventListener('click', copySummary);
-document.getElementById('btn-generate-summary').addEventListener('click', () => generateSummaryAction(false));
-document.getElementById('btn-generate-aggregate').addEventListener('click', () => generateSummaryAction(true));
-document.getElementById('btn-version-prev').addEventListener('click', () => {
-  if (summaryCurrentVersion > 1) loadVersion(summaryCurrentVersion - 1);
+
+// Version dropdown
+document.getElementById('btn-version-toggle').addEventListener('click', (e) => {
+  e.stopPropagation();
+  document.getElementById('summary-regen-dropdown').classList.remove('open');
+  document.getElementById('summary-version-dropdown').classList.toggle('open');
 });
-document.getElementById('btn-version-next').addEventListener('click', () => {
-  if (summaryCurrentVersion < summaryTotalVersions) loadVersion(summaryCurrentVersion + 1);
+document.getElementById('summary-version-list').addEventListener('click', (e) => {
+  const item = e.target.closest('[data-version]');
+  if (!item) return;
+  const v = parseInt(item.dataset.version);
+  loadVersion(v);
+  document.getElementById('summary-version-dropdown').classList.remove('open');
+});
+
+// Regenerate dropdown
+document.getElementById('btn-regenerate-toggle').addEventListener('click', (e) => {
+  e.stopPropagation();
+  document.getElementById('summary-version-dropdown').classList.remove('open');
+  document.getElementById('summary-regen-dropdown').classList.toggle('open');
+});
+document.getElementById('btn-regen-dir').addEventListener('click', () => generateSummaryAction(false));
+document.getElementById('btn-regen-all').addEventListener('click', () => generateSummaryAction(true));
+
+// Close dropdowns on outside click
+document.addEventListener('click', (e) => {
+  const vd = document.getElementById('summary-version-dropdown');
+  const rd = document.getElementById('summary-regen-dropdown');
+  if (vd && !vd.contains(e.target)) vd.classList.remove('open');
+  if (rd && !rd.contains(e.target)) rd.classList.remove('open');
 });
 
 // Summary reference click delegation
@@ -4238,19 +4595,42 @@ function renderChatHistoryBar() {
   if (delBtn) delBtn.addEventListener('click', () => deleteChat(delBtn.dataset.deleteId));
 }
 
+function closeChatInstant() {
+  saveChatSessions();
+  chatOpen = false;
+  const panel = document.getElementById('chat-panel');
+  panel.classList.remove('open');
+  document.body.classList.remove('chat-open');
+  document.getElementById('btn-chat').style.display = '';
+}
+
 function toggleChat() {
   chatOpen = !chatOpen;
   const panel = document.getElementById('chat-panel');
   const chatBtn = document.getElementById('btn-chat');
   if (chatOpen) {
-    panel.classList.add('open');
-    document.body.classList.add('chat-open');
-    chatBtn.style.background = 'var(--surface-2)';
-    chatBtn.style.color = 'var(--accent)';
-    // Force reflow then show
-    requestAnimationFrame(() => {
-      document.getElementById('chat-input').focus();
-    });
+    // Instant swap if summary is open
+    if (summaryVisible) {
+      const rail = document.getElementById('summary-siderail');
+      panel.style.transition = 'none';
+      rail.style.transition = 'none';
+      closeSummaryInstant();
+      panel.classList.add('open');
+      document.body.classList.add('chat-open');
+      chatBtn.style.display = 'none';
+      requestAnimationFrame(() => {
+        panel.style.transition = '';
+        rail.style.transition = '';
+        document.getElementById('chat-input').focus();
+      });
+    } else {
+      panel.classList.add('open');
+      document.body.classList.add('chat-open');
+      chatBtn.style.display = 'none';
+      requestAnimationFrame(() => {
+        document.getElementById('chat-input').focus();
+      });
+    }
     // Load sessions and ensure one exists
     loadChatSessions();
     if (chatSessions.length === 0) {
@@ -4266,8 +4646,7 @@ function toggleChat() {
     saveChatSessions();
     panel.classList.remove('open');
     document.body.classList.remove('chat-open');
-    chatBtn.style.background = '';
-    chatBtn.style.color = '';
+    chatBtn.style.display = '';
   }
 }
 
@@ -4308,11 +4687,78 @@ function renderChatMessages() {
     } else {
       let rendered = (typeof marked !== 'undefined') ? marked.parse(msg.content) : escapeHtml(msg.content);
       rendered = processChatRefs(rendered);
-      html += `<div class="chat-msg assistant" style="animation-delay:${i * 0.03}s"><div class="chat-msg-rendered">${rendered}</div><div class="chat-msg-actions"><button class="chat-copy-btn" data-copy-idx="${i}">${copyIcon} Copy</button></div></div>`;
+      let cardHtml = '';
+      if (msg.fileset && msg.fileset.files && msg.fileset.files.length > 0) {
+        cardHtml = renderFilesetCard(msg.fileset, i);
+      }
+      html += `<div class="chat-msg assistant" style="animation-delay:${i * 0.03}s"><div class="chat-msg-rendered">${rendered}</div>${cardHtml}<div class="chat-msg-actions"><button class="chat-copy-btn" data-copy-idx="${i}">${copyIcon} Copy</button></div></div>`;
     }
   });
   container.innerHTML = html;
   container.scrollTop = container.scrollHeight;
+}
+
+function renderFilesetCard(fileset, msgIdx) {
+  const { files, description } = fileset;
+  const maxThumbs = 4;
+  const visible = files.slice(0, maxThumbs);
+  const overflow = files.length - maxThumbs;
+
+  let thumbsHtml = files.map((f, idx) => {
+    const thumbUrl = `/api/files/${encodeURIComponent(f)}/thumb`;
+    const hiddenClass = idx >= maxThumbs ? ' hidden-thumb' : '';
+    return `<img class="chat-fileset-thumb${hiddenClass}" src="${thumbUrl}" alt="${escapeHtml(f)}" data-file="${escapeHtml(f)}" onerror="this.style.display='none'">`;
+  }).join('');
+
+  if (overflow > 0) {
+    thumbsHtml += `<div class="chat-fileset-overflow" data-fileset-toggle="${msgIdx}">+${overflow}</div>`;
+  }
+
+  const fileNames = files.map(f => f.replace(/^.*\//, '').replace(/\.[^.]+$/, '')).join(', ');
+  const count = files.length;
+  const downloadIcon = '<i class="ph ph-download-simple" style="font-size:14px"></i>';
+
+  return `<div class="chat-fileset" data-msg-idx="${msgIdx}">
+    <div class="chat-fileset-thumbs">${thumbsHtml}</div>
+    <div class="chat-fileset-info">
+      <div class="chat-fileset-title">${count} file${count !== 1 ? 's' : ''} — ${escapeHtml(description)}</div>
+      <div class="chat-fileset-files">${escapeHtml(fileNames)}</div>
+    </div>
+    <button class="chat-fileset-download" data-fileset-idx="${msgIdx}">${downloadIcon} Download ${count} file${count !== 1 ? 's' : ''}</button>
+  </div>`;
+}
+
+async function downloadFileset(fileList, description, btnEl) {
+  if (btnEl) { btnEl.classList.add('downloading'); btnEl.innerHTML = '<i class="ph ph-spinner" style="font-size:14px;animation:spin 1s linear infinite"></i> Preparing...'; }
+  try {
+    const res = await fetch('/api/download-files', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ files: fileList }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Download failed');
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const disposition = res.headers.get('Content-Disposition') || '';
+    a.download = disposition.match(/filename="(.+)"/)?.[1] || 'files.zip';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert('Download failed: ' + e.message);
+  } finally {
+    if (btnEl) {
+      btnEl.classList.remove('downloading');
+      const count = fileList.length;
+      btnEl.innerHTML = `<i class="ph ph-download-simple" style="font-size:14px"></i> Download ${count} file${count !== 1 ? 's' : ''}`;
+    }
+  }
 }
 
 function showChatTyping() {
@@ -4393,7 +4839,9 @@ async function sendChatMessage(text) {
     if (res.error) {
       chatHistory.push({ role: 'assistant', content: 'Error: ' + res.error });
     } else {
-      chatHistory.push({ role: 'assistant', content: res.reply });
+      const msg = { role: 'assistant', content: res.reply || '' };
+      if (res.fileset) msg.fileset = res.fileset;
+      chatHistory.push(msg);
     }
     renderChatMessages();
     saveChatSessions();
@@ -4662,6 +5110,7 @@ document.getElementById('chat-file-upload').addEventListener('change', (e) => {
 
 // Topbar chat button
 document.getElementById('btn-chat').addEventListener('click', toggleChat);
+document.getElementById('chat-close-btn').addEventListener('click', toggleChat);
 
 // Send button
 document.getElementById('chat-send').addEventListener('click', () => {
@@ -4712,6 +5161,28 @@ document.getElementById('chat-messages').addEventListener('click', (e) => {
     } else {
       navigateToImage(refFile);
     }
+    return;
+  }
+  // Smart card expand/collapse
+  const toggle = e.target.closest('.chat-fileset-overflow');
+  if (toggle) {
+    const card = toggle.closest('.chat-fileset');
+    const isExpanded = card.classList.toggle('expanded');
+    toggle.textContent = isExpanded ? 'Show less' : `+${card.querySelectorAll('.hidden-thumb').length}`;
+    return;
+  }
+  // Smart card thumbnail click — navigate to file
+  const thumb = e.target.closest('.chat-fileset-thumb');
+  if (thumb && thumb.dataset.file) {
+    navigateToImage(thumb.dataset.file);
+    return;
+  }
+  // Smart card download
+  const dlBtn = e.target.closest('.chat-fileset-download');
+  if (dlBtn) {
+    const msgIdx = parseInt(dlBtn.dataset.filesetIdx);
+    const msg = chatHistory[msgIdx];
+    if (msg && msg.fileset) downloadFileset(msg.fileset.files, msg.fileset.description, dlBtn);
     return;
   }
   const btn = e.target.closest('.chat-copy-btn');
