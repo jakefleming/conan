@@ -249,6 +249,8 @@ async function askClaude(relPath: string, userPrompt?: string): Promise<string> 
 
   const messages: any[] = [];
   const content: any[] = [];
+  const isText = TEXT_EXTENSIONS.has(ext);
+  const isPdf = ext === ".pdf";
 
   if (isImage) {
     const imageDataRaw = await readFile(filePath);
@@ -259,25 +261,52 @@ async function askClaude(relPath: string, userPrompt?: string): Promise<string> 
       type: "image",
       source: { type: "base64", media_type: mediaType, data: base64 },
     });
+  } else if (isPdf) {
+    // Send PDF as a document block
+    const pdfData = Buffer.from(await readFile(filePath));
+    if (pdfData.length < 30 * 1024 * 1024) {
+      content.push({
+        type: "document",
+        source: { type: "base64", media_type: "application/pdf", data: pdfData.toString("base64") },
+      });
+    }
+  } else if (isText) {
+    // Include the text file content directly
+    const textContent = await readFile(filePath, "utf-8");
+    content.push({
+      type: "text",
+      text: `--- File content of "${base}" ---\n${textContent.slice(0, MAX_DOC_SIZE)}\n--- End of file ---`,
+    });
   }
 
   const userPromptSection = userPrompt
     ? `\n\nThe user is specifically asking: "${userPrompt}"`
     : "";
 
+  let fileTypeInstruction = "";
+  if (isImage) {
+    fileTypeInstruction = "Look at this image carefully. Read ALL handwritten text, labels, arrows, and diagram elements.";
+  } else if (isPdf) {
+    fileTypeInstruction = "Read this PDF document carefully. Analyze its full content including text, tables, and any embedded images.";
+  } else if (isText) {
+    fileTypeInstruction = "Read this text document carefully. Analyze its full content, structure, and key information.";
+  } else {
+    fileTypeInstruction = `This is a ${ext} file.`;
+  }
+
   content.push({
     type: "text",
     text: `You are a technical analyst reviewing a file called "${base}" that was captured during an in-person product/design session. The user has already provided voice annotations with their own context about what this file contains.${existingContext}${userPromptSection}
 
-${isImage ? "Look at this image carefully. Read ALL handwritten text, labels, arrows, and diagram elements." : `This is a ${ext} file.`}
+${fileTypeInstruction}
 
 ${userPrompt ? `Focus your response on answering the user's question/request: "${userPrompt}". Be direct and specific.` : `Your job is to ADD VALUE beyond what the user already said. Follow these rules strictly:
-1. Start with "Implementation notes from reviewing sketch + user context:" (or similar)
+1. Start with "Implementation notes from reviewing ${isImage ? "sketch" : "document"} + user context:" (or similar)
 2. Use a numbered list. Keep each point to 2-3 sentences max.
-3. First, identify any specific text, labels, UI elements, or details visible in the image that the user did NOT mention.
+3. First, identify any specific ${isImage ? "text, labels, UI elements, or details visible in the image" : "information, decisions, action items, or key points in the document"} that the user did NOT mention.
 4. Then add implementation notes: what does this mean for the codebase? What data models, APIs, or components does this imply?
 5. Flag any ambiguities or open questions worth clarifying with the team.
-6. Do NOT repeat what the user already said. Do NOT give generic advice about HIPAA, competitive analysis, or best practices unless directly relevant to something visible in the image.
+6. Do NOT repeat what the user already said. Do NOT give generic advice about HIPAA, competitive analysis, or best practices unless directly relevant to something in the ${isImage ? "image" : "document"}.
 7. Do NOT use bold/header markdown formatting. Plain text with numbered points only.
 8. Keep it under 400 words. Be specific and actionable, not generic.`}`,
   });
@@ -561,7 +590,7 @@ async function collectAllContexts(dir: string, relPath: string): Promise<{ dir: 
   return results;
 }
 
-const TEXT_EXTENSIONS = new Set([".md", ".txt"]);
+const TEXT_EXTENSIONS = new Set([".md", ".txt", ".json", ".csv", ".tsv", ".xml", ".yaml", ".yml", ".toml", ".ini", ".log", ".html", ".css", ".js", ".ts", ".py", ".rb", ".sh", ".sql", ".rtf"]);
 const MAX_DOC_SIZE = 50000; // 50KB per document to avoid blowing up the prompt
 
 async function collectTextDocuments(dir: string, relPath: string, recursive: boolean = false): Promise<{ path: string; content: string }[]> {
