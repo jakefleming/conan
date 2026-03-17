@@ -193,13 +193,6 @@
     align-items: center;
     gap: 8px;
   }
-  .progress-text {
-    font-size: 11px;
-    color: var(--text-muted);
-    white-space: nowrap;
-    font-family: 'SF Mono', ui-monospace, monospace;
-    letter-spacing: -0.02em;
-  }
   .btn {
     padding: 7px 14px;
     border: none;
@@ -331,25 +324,6 @@
     background: var(--surface-2);
   }
   .search-input::placeholder { color: var(--text-subtle); }
-  .filter-btn {
-    padding: 6px 14px;
-    border-radius: 8px;
-    font-size: 12px;
-    font-weight: 500;
-    border: 1px solid var(--border-strong);
-    background: transparent;
-    color: var(--text-muted);
-    cursor: pointer;
-    font-family: inherit;
-    transition: all 0.2s;
-  }
-  .filter-btn.active {
-    background: var(--accent);
-    color: var(--accent-on);
-    border-color: var(--accent);
-    font-weight: 600;
-  }
-  .filter-btn:hover:not(.active) { background: var(--surface-2); color: var(--text); }
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(185px, 1fr));
@@ -402,17 +376,6 @@
     margin-top: 3px;
     letter-spacing: -0.01em;
   }
-  .status-dot {
-    display: inline-block;
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    margin-right: 4px;
-    vertical-align: middle;
-  }
-  .status-dot.pending { background: var(--yellow); }
-  .status-dot.annotated { background: var(--green); }
-  .status-dot.skipped { background: var(--text-subtle); }
 
   /* ── Gallery Mode ── */
   .gallery {
@@ -677,26 +640,6 @@
     font-weight: 600;
     word-break: break-all;
     letter-spacing: -0.02em;
-  }
-  .sidebar-position {
-    font-size: 11px;
-    color: var(--text-muted);
-    margin-top: 4px;
-    font-family: 'SF Mono', ui-monospace, monospace;
-  }
-  .sidebar-progress {
-    width: 100%;
-    height: 3px;
-    background: var(--border);
-    margin-top: 10px;
-    border-radius: 2px;
-    overflow: hidden;
-  }
-  .sidebar-progress-fill {
-    height: 100%;
-    background: var(--accent);
-    border-radius: 2px;
-    transition: width 0.3s ease;
   }
 
   .comments-list {
@@ -1817,7 +1760,6 @@
     <span class="topbar-folder" id="folder-path">Loading...</span>
   </div>
   <div class="topbar-right">
-    <span class="progress-text" id="progress-text"></span>
     <button class="btn btn-ghost" id="btn-toggle-summary">Summary</button>
     <div class="export-wrapper" style="position:relative;display:inline-block">
       <button class="btn btn-ghost" id="btn-export">Export</button>
@@ -1850,10 +1792,6 @@
   <div class="overview" id="overview">
     <div class="filter-bar">
       <input type="text" class="search-input" id="search-input" placeholder="Search comments…">
-      <button class="filter-btn active" data-filter="all">All</button>
-      <button class="filter-btn" data-filter="pending">Pending</button>
-      <button class="filter-btn" data-filter="annotated">Annotated</button>
-      <button class="filter-btn" data-filter="skipped">Skipped</button>
     </div>
     <div class="grid" id="grid"></div>
   </div>
@@ -1905,8 +1843,6 @@
     <div class="sidebar-resize-handle" id="sidebar-resize-handle"></div>
     <div class="sidebar-header">
       <div class="sidebar-filename" id="sidebar-filename"></div>
-      <div class="sidebar-position" id="sidebar-position"></div>
-      <div class="sidebar-progress"><div class="sidebar-progress-fill" id="sidebar-progress-fill"></div></div>
     </div>
     <div class="comments-list" id="comments-list"></div>
     <div class="sidebar-input">
@@ -2030,7 +1966,6 @@ const FILE_ICONS = {
 
 let files = [];
 let currentIndex = 0;
-let activeFilter = 'all';
 let searchQuery = '';
 let galleryMode = false;
 let currentDir = '';
@@ -2149,7 +2084,6 @@ function onlyDirs() {
 
 function filteredFiles() {
   let result = onlyFiles();
-  if (activeFilter !== 'all') result = result.filter(f => f.status === activeFilter);
   if (searchQuery) {
     const q = searchQuery.toLowerCase();
     result = result.filter(f =>
@@ -2161,9 +2095,7 @@ function filteredFiles() {
 }
 
 function updateProgress() {
-  const fileItems = onlyFiles();
-  const annotated = fileItems.filter(f => f.status === 'annotated').length;
-  document.getElementById('progress-text').textContent = `${annotated}/${fileItems.length} annotated`;
+  // No-op: status tracking removed
 }
 
 // ── Grid View ──
@@ -2178,7 +2110,7 @@ function renderGrid() {
       <div class="grid-thumb-placeholder">\u{1F4C1}</div>
       <div class="grid-info">
         <div class="grid-name">${escapeHtml(d.name)}</div>
-        <div class="grid-meta">${d.fileCount} file${d.fileCount !== 1 ? 's' : ''}${d.dirCount ? ` \u00B7 ${d.dirCount} folder${d.dirCount !== 1 ? 's' : ''}` : ''}${d.annotatedCount ? ` \u00B7 ${d.annotatedCount} annotated` : ''}</div>
+        <div class="grid-meta">${d.fileCount} file${d.fileCount !== 1 ? 's' : ''}${d.dirCount ? ` \u00B7 ${d.dirCount} folder${d.dirCount !== 1 ? 's' : ''}` : ''}</div>
       </div>
     </div>
   `).join('');
@@ -2194,8 +2126,7 @@ function renderGrid() {
         <div class="grid-info">
           <div class="grid-name">${escapeHtml(file.name)}</div>
           <div class="grid-meta">
-            <span class="status-dot ${file.status}"></span>
-            ${file.status}${file.commentCount ? ` \u00B7 ${file.commentCount} comment${file.commentCount > 1 ? 's' : ''}` : ''}
+            ${file.commentCount ? `${file.commentCount} comment${file.commentCount > 1 ? 's' : ''}` : ''}
           </div>
         </div>
       </div>
@@ -2270,8 +2201,6 @@ async function renderGalleryItem() {
 
   // Sidebar info
   document.getElementById('sidebar-filename').textContent = file.name;
-  document.getElementById('sidebar-position').textContent = `${currentIndex + 1} of ${fileItems.length}`;
-  document.getElementById('sidebar-progress-fill').style.width = `${((currentIndex + 1) / fileItems.length) * 100}%`;
 
   // Load comments from file data we already have
   renderComments(file.path, file);
@@ -2286,8 +2215,6 @@ function refreshSidebar() {
   if (!fileItems[currentIndex]) return;
   const file = fileItems[currentIndex];
   document.getElementById('sidebar-filename').textContent = file.name;
-  document.getElementById('sidebar-position').textContent = `${currentIndex + 1} of ${fileItems.length}`;
-  document.getElementById('sidebar-progress-fill').style.width = `${((currentIndex + 1) / fileItems.length) * 100}%`;
   renderComments(file.path, file);
   renderRegionOverlay();
 }
@@ -2541,16 +2468,6 @@ async function deleteComment(filename, index) {
   refreshSidebar();
 }
 
-async function skipFile() {
-  const file = onlyFiles()[currentIndex];
-  await api(`/api/files/${encodeURIComponent(file.path)}/status`, {
-    method: 'PATCH',
-    body: { status: 'skipped' },
-  });
-  await reloadCurrentDir();
-  goNext();
-}
-
 function goNext() {
   const fileItems = onlyFiles();
   if (currentIndex < fileItems.length - 1) {
@@ -2566,11 +2483,8 @@ function goPrev() {
   }
 }
 
-// Start "Add Context" from first pending file
 function startAddContext() {
-  const fileItems = onlyFiles();
-  const firstPending = fileItems.findIndex(f => f.status === 'pending');
-  currentIndex = firstPending >= 0 ? firstPending : 0;
+  currentIndex = 0;
   enterGallery();
 }
 
@@ -3437,16 +3351,6 @@ document.getElementById('comment-input').addEventListener('keydown', (e) => {
   }
 });
 
-// Filter buttons
-document.querySelectorAll('.filter-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    activeFilter = btn.dataset.filter;
-    renderGrid();
-  });
-});
-
 document.getElementById('search-input').addEventListener('input', (e) => {
   searchQuery = e.target.value.trim();
   renderGrid();
@@ -3470,7 +3374,6 @@ document.addEventListener('keydown', (e) => {
     case 'ArrowRight': goNext(); e.preventDefault(); break;
     case '/': document.getElementById('comment-input').focus(); e.preventDefault(); break;
     case 'r': case 'R': toggleRecording(); e.preventDefault(); break;
-    case 's': case 'S': skipFile(); e.preventDefault(); break;
     case 'Delete':
     case 'Backspace':
       if (selectedRegionIndex !== null) {
