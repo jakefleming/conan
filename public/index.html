@@ -573,6 +573,24 @@
   .gallery-preview .file-placeholder .icon { font-size: 64px; margin-bottom: 12px; }
   .gallery-preview .file-placeholder .name { font-size: 16px; }
 
+  .text-preview {
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    padding: 32px 40px;
+    box-sizing: border-box;
+  }
+  .text-preview pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace;
+    font-size: 13px;
+    line-height: 1.7;
+    color: var(--text);
+    tab-size: 4;
+  }
+
   .gallery-nav {
     position: absolute;
     top: 50%;
@@ -2081,6 +2099,9 @@
     <div class="sidebar-header">
       <div class="sidebar-filename" id="sidebar-filename"></div>
       <div class="sidebar-header-actions">
+        <button class="sidebar-icon-btn" id="btn-reveal-finder" title="Reveal in Finder">
+          <i class="ph ph-folder-open" style="font-size:16px"></i>
+        </button>
         <div class="copy-dropdown" id="copy-dropdown">
           <button class="sidebar-icon-btn" id="btn-copy-menu" title="Copy image">
             <i class="ph ph-copy" style="font-size:16px"></i>
@@ -2206,6 +2227,7 @@ function cssVar(name) {
 }
 
 const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif', '.svg'];
+const TEXT_EXTS = ['.txt', '.md', '.json', '.csv', '.tsv', '.log', '.yml', '.yaml', '.toml', '.xml', '.html', '.css', '.js', '.ts', '.py', '.sh', '.bash', '.zsh', '.env', '.ini', '.cfg', '.conf'];
 const FILE_ICONS = {
   '.pdf': '\u{1F4C4}', '.txt': '\u{1F4DD}', '.md': '\u{1F4DD}',
   '.doc': '\u{1F4C3}', '.docx': '\u{1F4C3}',
@@ -2438,6 +2460,14 @@ async function renderGalleryItem() {
     initZoom();
   } else if (file.ext === '.pdf') {
     previewEl.innerHTML = `<iframe src="/api/files/${encodeURIComponent(file.path)}/preview" style="width:100%;height:100%;border:none;border-radius:4px"></iframe>`;
+  } else if (TEXT_EXTS.includes(file.ext)) {
+    previewEl.innerHTML = `<div class="text-preview"><pre>Loading...</pre></div>`;
+    fetch(`/api/files/${encodeURIComponent(file.path)}/preview`)
+      .then(r => r.text())
+      .then(text => {
+        const pre = previewEl.querySelector('pre');
+        if (pre) pre.textContent = text;
+      });
   } else {
     previewEl.innerHTML = `<div class="file-placeholder"><div class="icon">${FILE_ICONS[file.ext] || '\u{1F4CE}'}</div><div class="name">${file.name}</div></div>`;
   }
@@ -3569,6 +3599,11 @@ document.getElementById('export-root').addEventListener('click', () => {
 
 // ── Event Listeners ──
 document.getElementById('btn-back').addEventListener('click', exitGallery);
+document.getElementById('btn-reveal-finder').addEventListener('click', () => {
+  const fileItems = onlyFiles();
+  if (!fileItems[currentIndex]) return;
+  fetch(`/api/files/${encodeURIComponent(fileItems[currentIndex].path)}/reveal`, { method: 'POST' });
+});
 document.getElementById('btn-add-comment').addEventListener('click', (e) => {
   if (e.altKey) {
     askClaudeForFile();

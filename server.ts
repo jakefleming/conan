@@ -8,13 +8,19 @@ const ALLOWED_EXTENSIONS = new Set([
   ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif",
   ".pdf", ".svg",
   ".txt", ".md", ".doc", ".docx",
+  ".json", ".csv", ".tsv", ".log", ".yml", ".yaml", ".toml", ".xml",
+  ".html", ".css", ".js", ".ts", ".py", ".sh",
 ]);
 
 const MIME_TYPES: Record<string, string> = {
   ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
   ".gif": "image/gif", ".webp": "image/webp", ".heic": "image/heic",
   ".heif": "image/heif", ".svg": "image/svg+xml", ".pdf": "application/pdf",
-  ".txt": "text/plain", ".md": "text/plain",
+  ".txt": "text/plain", ".md": "text/plain", ".log": "text/plain",
+  ".json": "application/json", ".csv": "text/csv", ".tsv": "text/tab-separated-values",
+  ".yml": "text/yaml", ".yaml": "text/yaml", ".toml": "text/plain",
+  ".xml": "text/xml", ".html": "text/html", ".css": "text/css",
+  ".js": "text/javascript", ".ts": "text/plain", ".py": "text/plain", ".sh": "text/plain",
   ".doc": "application/msword", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 };
 
@@ -607,9 +613,32 @@ async function collectThumbnails(
           continue;
         }
         const ext = extname(entry.name).toLowerCase();
+        const displayName = relPath ? `${relPath}/${entry.name}` : entry.name;
+
+        // Handle PDFs
+        if (ext === ".pdf") {
+          try {
+            const filePath = join(absDir, entry.name);
+            const pdfData = Buffer.from(await readFile(filePath));
+            // Claude API max PDF size ~32MB; skip very large ones
+            if (pdfData.length < 30 * 1024 * 1024) {
+              blocks.push({ type: "text", text: `[PDF: ${displayName}]` });
+              blocks.push({
+                type: "document",
+                source: {
+                  type: "base64",
+                  media_type: "application/pdf",
+                  data: pdfData.toString("base64"),
+                },
+              });
+              fileNames.push(displayName);
+            }
+          } catch {}
+          continue;
+        }
+
         if (!IMAGE_EXTENSIONS.has(ext)) continue;
 
-        const displayName = relPath ? `${relPath}/${entry.name}` : entry.name;
         const thumbDir = join(absDir, ".thumbs");
         const thumbPath = join(thumbDir, `${basename(entry.name, ext)}.jpg`);
 
@@ -1322,6 +1351,17 @@ Return ONLY your description, no labels or prefixes.`,
           "Access-Control-Allow-Origin": "*",
         },
       });
+    }
+
+    // API: reveal file in Finder
+    const revealMatch = path.match(/^\/api\/files\/(.+)\/reveal$/);
+    if (revealMatch && req.method === "POST") {
+      const relPath = decodeURIComponent(revealMatch[1]);
+      let filePath: string;
+      try { filePath = safePath(relPath); } catch { return json({ error: "Invalid path" }, 400); }
+      if (!existsSync(filePath)) return json({ error: "Not found" }, 404);
+      Bun.spawn(["open", "-R", filePath]);
+      return json({ ok: true });
     }
 
     // API: upload audio for a file
