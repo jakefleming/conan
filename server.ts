@@ -204,7 +204,7 @@ async function getTree(): Promise<TreeEntry> {
 
 function invalidateTreeCache() { treeCache = null; }
 
-type Settings = { apiKey?: string };
+type Settings = { apiKey?: string; recentFolders?: string[] };
 
 async function readSettings(): Promise<Settings> {
   const settingsPath = join(import.meta.dir, SETTINGS_FILE);
@@ -531,7 +531,7 @@ if (!targetFolder) {
   process.exit(1);
 }
 
-const resolvedFolder = targetFolder.startsWith("/")
+let resolvedFolder = targetFolder.startsWith("/")
   ? targetFolder
   : join(process.cwd(), targetFolder);
 
@@ -1087,7 +1087,7 @@ const server = Bun.serve({
     // API: config
     if (path === "/api/config") {
       const settings = await readSettings();
-      return json({ folder: resolvedFolder, hasApiKey: !!settings.apiKey });
+      return json({ folder: resolvedFolder, hasApiKey: !!settings.apiKey, recentFolders: settings.recentFolders || [] });
     }
 
     // API: settings
@@ -1097,8 +1097,57 @@ const server = Bun.serve({
     }
     if (path === "/api/settings" && req.method === "POST") {
       const body = (await req.json()) as { apiKey: string };
-      await writeSettings({ apiKey: body.apiKey });
+      const settings = await readSettings();
+      await writeSettings({ ...settings, apiKey: body.apiKey });
       return json({ ok: true });
+    }
+
+    // API: switch target folder
+    if (path === "/api/folder/switch" && req.method === "POST") {
+      const body = (await req.json()) as { folder: string };
+      const newFolder = body.folder;
+      if (!newFolder || !existsSync(newFolder)) return json({ error: "Folder not found" }, 400);
+      // Switch the active folder
+      resolvedFolder = newFolder;
+      invalidateTreeCache();
+      // Add to recents
+      const settings = await readSettings();
+      const recents = (settings.recentFolders || []).filter((f: string) => f !== newFolder);
+      recents.unshift(newFolder);
+      if (recents.length > 10) recents.length = 10;
+      await writeSettings({ ...settings, recentFolders: recents });
+      console.log(`Switched to folder: ${resolvedFolder}`);
+      return json({ folder: resolvedFolder });
+    }
+
+    // API: browse for folder using native macOS picker
+    if (path === "/api/folder/browse" && req.method === "POST") {
+      try {
+        const proc = Bun.spawn(["osascript", "-e", 'POSIX path of (choose folder with prompt "Select project folder")'], {
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const output = await new Response(proc.stdout).text();
+        const errOutput = await new Response(proc.stderr).text();
+        await proc.exited;
+        const selectedPath = output.trim().replace(/\/$/, ""); // remove trailing slash
+        if (!selectedPath || errOutput.includes("User canceled")) {
+          return json({ cancelled: true });
+        }
+        if (!existsSync(selectedPath)) return json({ error: "Folder not found" }, 400);
+        // Switch to it
+        resolvedFolder = selectedPath;
+        invalidateTreeCache();
+        const settings = await readSettings();
+        const recents = (settings.recentFolders || []).filter((f: string) => f !== selectedPath);
+        recents.unshift(selectedPath);
+        if (recents.length > 10) recents.length = 10;
+        await writeSettings({ ...settings, recentFolders: recents });
+        console.log(`Switched to folder: ${resolvedFolder}`);
+        return json({ folder: resolvedFolder });
+      } catch (e: any) {
+        return json({ error: e.message }, 500);
+      }
     }
 
     // API: directory tree

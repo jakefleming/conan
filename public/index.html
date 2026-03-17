@@ -179,15 +179,73 @@
     color: var(--text);
   }
   .topbar-folder {
-    font-size: 12px;
+    font-size: 11px;
     color: var(--text-muted);
-    overflow: hidden;
+    overflow: visible;
     text-overflow: ellipsis;
     white-space: nowrap;
     font-family: 'SF Mono', ui-monospace, monospace;
-    font-size: 11px;
     opacity: 0.7;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: background 0.15s, opacity 0.15s;
+    position: relative;
   }
+  .topbar-folder:hover { opacity: 1; background: var(--surface-2); }
+  .folder-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: var(--shadow-lg, 0 8px 24px rgba(0,0,0,0.3));
+    min-width: 360px;
+    max-width: 500px;
+    z-index: 100;
+    overflow: hidden;
+    display: none;
+  }
+  .folder-dropdown.open { display: block; }
+  .folder-dropdown-header {
+    padding: 10px 12px 6px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .folder-dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    font-size: 12px;
+    color: var(--text);
+    cursor: pointer;
+    border: none;
+    background: none;
+    width: 100%;
+    text-align: left;
+    font-family: 'SF Mono', ui-monospace, monospace;
+    transition: background 0.1s;
+  }
+  .folder-dropdown-item:hover { background: var(--hover-overlay); }
+  .folder-dropdown-item.active { color: var(--accent); }
+  .folder-dropdown-item .folder-item-path {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+  }
+  .folder-dropdown-divider {
+    height: 1px;
+    background: var(--border);
+    margin: 4px 0;
+  }
+  .folder-dropdown-item i { font-size: 14px; flex-shrink: 0; color: var(--text-muted); }
   .topbar-right {
     display: flex;
     align-items: center;
@@ -2006,7 +2064,7 @@
 <div class="topbar">
   <div class="topbar-left">
     <span class="topbar-logo">Context Annotator</span>
-    <span class="topbar-folder" id="folder-path">Loading...</span>
+    <div class="topbar-folder" id="folder-path">Loading...<div class="folder-dropdown" id="folder-dropdown"></div></div>
   </div>
   <div class="topbar-right">
     <button class="btn btn-ghost" id="btn-settings" title="API Key"><i class="ph ph-key" style="font-size:18px"></i></button>
@@ -2272,9 +2330,90 @@ async function api(path, opts = {}) {
   return res.json();
 }
 
+let currentFolder = '';
+let recentFolders = [];
+
 async function loadConfig() {
   const config = await api('/api/config');
-  document.getElementById('folder-path').textContent = config.folder;
+  currentFolder = config.folder;
+  recentFolders = config.recentFolders || [];
+  // Make sure current folder is in recents
+  if (!recentFolders.includes(currentFolder)) {
+    recentFolders.unshift(currentFolder);
+  }
+  updateFolderDisplay();
+}
+
+function updateFolderDisplay() {
+  const el = document.getElementById('folder-path');
+  // Show just text, preserve the dropdown child
+  const dropdown = document.getElementById('folder-dropdown');
+  el.childNodes.forEach(n => { if (n !== dropdown) n.remove(); });
+  el.insertBefore(document.createTextNode(currentFolder), dropdown);
+}
+
+function renderFolderDropdown() {
+  const dropdown = document.getElementById('folder-dropdown');
+  let html = '';
+  if (recentFolders.length > 0) {
+    html += '<div class="folder-dropdown-header">Recent Projects</div>';
+    recentFolders.forEach(f => {
+      const isActive = f === currentFolder;
+      html += `<button class="folder-dropdown-item${isActive ? ' active' : ''}" data-folder="${escapeHtml(f)}">
+        <i class="ph ${isActive ? 'ph-folder-open' : 'ph-folder'}"></i>
+        <span class="folder-item-path">${escapeHtml(f)}</span>
+      </button>`;
+    });
+  }
+  html += '<div class="folder-dropdown-divider"></div>';
+  html += `<button class="folder-dropdown-item" id="folder-browse">
+    <i class="ph ph-folder-plus"></i>
+    <span>Browse for folder...</span>
+  </button>`;
+  dropdown.innerHTML = html;
+
+  // Bind click handlers
+  dropdown.querySelectorAll('[data-folder]').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const folder = btn.dataset.folder;
+      if (folder === currentFolder) { dropdown.classList.remove('open'); return; }
+      await switchFolder(folder);
+    });
+  });
+  dropdown.querySelector('#folder-browse').addEventListener('click', async (e) => {
+    e.stopPropagation();
+    dropdown.classList.remove('open');
+    await browseForFolder();
+  });
+}
+
+async function switchFolder(folder) {
+  const res = await api('/api/folder/switch', { method: 'POST', body: { folder } });
+  if (res.error) { alert('Error: ' + res.error); return; }
+  currentFolder = res.folder;
+  recentFolders = recentFolders.filter(f => f !== currentFolder);
+  recentFolders.unshift(currentFolder);
+  updateFolderDisplay();
+  document.getElementById('folder-dropdown').classList.remove('open');
+  // Reset UI state
+  currentDir = '';
+  await loadFiles();
+  exitGallery();
+}
+
+async function browseForFolder() {
+  const res = await api('/api/folder/browse', { method: 'POST' });
+  if (res.cancelled) return;
+  if (res.error) { alert('Error: ' + res.error); return; }
+  currentFolder = res.folder;
+  recentFolders = recentFolders.filter(f => f !== currentFolder);
+  recentFolders.unshift(currentFolder);
+  updateFolderDisplay();
+  // Reset UI state
+  currentDir = '';
+  await loadFiles();
+  exitGallery();
 }
 
 async function loadFiles() {
@@ -3973,6 +4112,21 @@ async function checkApiKey() {
 function updateAskClaudeButton() {
   // No-op — Ask Claude is now triggered via Cmd+Enter
 }
+
+// Folder path dropdown
+document.getElementById('folder-path').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const dropdown = document.getElementById('folder-dropdown');
+  const wasOpen = dropdown.classList.contains('open');
+  if (!wasOpen) renderFolderDropdown();
+  dropdown.classList.toggle('open');
+});
+document.addEventListener('click', (e) => {
+  const dropdown = document.getElementById('folder-dropdown');
+  if (dropdown && !e.target.closest('#folder-path')) {
+    dropdown.classList.remove('open');
+  }
+});
 
 document.getElementById('btn-settings').addEventListener('click', async () => {
   const settings = await api('/api/settings');
