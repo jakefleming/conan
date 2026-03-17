@@ -255,6 +255,26 @@
     border: none;
     padding: 6px;
   }
+  #btn-index-status {
+    position: relative;
+  }
+  .index-dot {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-tertiary);
+    transition: background 0.3s;
+  }
+  .index-dot.green { background: #22c55e; }
+  .index-dot.yellow { background: #eab308; animation: pulse-dot 1.2s ease-in-out infinite; }
+  .index-dot.gray { background: var(--text-tertiary); }
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
   .btn {
     padding: 7px 14px;
     border: none;
@@ -1855,8 +1875,9 @@
     align-items: flex-end;
   }
   .chat-input {
-    flex: 1;
-    padding: 7px 14px;
+    display: block;
+    width: 100%;
+    padding: 7px 36px 7px 14px;
     background: var(--bg);
     border: 1px solid var(--border-strong);
     border-radius: var(--radius);
@@ -2067,6 +2088,10 @@
     <div class="topbar-folder" id="folder-path">Loading...<div class="folder-dropdown" id="folder-dropdown"></div></div>
   </div>
   <div class="topbar-right">
+    <button class="btn btn-ghost" id="btn-index-status" title="Index status" onclick="showIndexPanel()">
+      <span class="index-dot" id="index-dot"></span>
+      <i class="ph ph-database" style="font-size:18px"></i>
+    </button>
     <button class="btn btn-ghost" id="btn-settings" title="API Key"><i class="ph ph-key" style="font-size:18px"></i></button>
     <div class="export-wrapper" style="position:relative;display:inline-block">
       <button class="btn btn-ghost" id="btn-export" title="Export"><i class="ph ph-export" style="font-size:18px"></i></button>
@@ -2275,7 +2300,10 @@
           </button>
         </div>
       </div>
-      <textarea class="chat-input" id="chat-input" placeholder="Ask about your files..." rows="1"></textarea>
+      <div class="input-wrap">
+        <textarea class="chat-input" id="chat-input" placeholder="Ask about your files..." rows="1"></textarea>
+        <button class="btn-mic" id="chat-mic" title="Voice input"><i class="ph ph-microphone" style="font-size:16px"></i></button>
+      </div>
       <button class="chat-send-btn" id="chat-send" title="Send">
         <i class="ph ph-paper-plane-tilt" style="font-size:16px"></i>
       </button>
@@ -2285,6 +2313,20 @@
 </div>
 
 <!-- Settings Modal -->
+<!-- Index Status Panel -->
+<div class="modal-overlay" id="index-modal">
+  <div class="modal">
+    <h3>Search Index</h3>
+    <div id="index-stats" style="margin:12px 0;font-size:13px;color:var(--text-secondary);line-height:1.8">
+      Loading...
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="document.getElementById('index-modal').classList.remove('active')">Close</button>
+      <button class="btn btn-primary" id="btn-reindex" onclick="reindexProject()">Rebuild Index</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="settings-modal">
   <div class="modal">
     <h3>Settings</h3>
@@ -4020,7 +4062,8 @@ function initVoice() {
 
   recognition.onend = () => {
     if (isRecording) {
-      // Auto-restart if still in recording mode (browser stops after silence)
+      // Preserve accumulated text before restarting
+      textBeforeRecording = document.getElementById('comment-input').value.trim();
       recognition.start();
       return;
     }
@@ -4085,8 +4128,7 @@ function stopRecording() {
     mediaRecorder.stop();
   }
 
-  // Auto-submit after a short delay to let final results + audio upload land
-  setTimeout(() => addComment(), 500);
+  // Let user review transcription and submit manually
 }
 
 function toggleRecording() {
@@ -4127,6 +4169,72 @@ document.addEventListener('click', (e) => {
     dropdown.classList.remove('open');
   }
 });
+
+// ── Index Status ──
+async function updateIndexStatus() {
+  try {
+    const stats = await api('/api/index/stats');
+    const dot = document.getElementById('index-dot');
+    if (stats.indexing) {
+      dot.className = 'index-dot yellow';
+      dot.title = 'Indexing in progress...';
+    } else if (stats.totalFiles > 0) {
+      dot.className = 'index-dot green';
+      dot.title = `${stats.totalFiles} files indexed`;
+    } else {
+      dot.className = 'index-dot gray';
+      dot.title = 'Index empty';
+    }
+    return stats;
+  } catch { return null; }
+}
+
+async function showIndexPanel() {
+  const modal = document.getElementById('index-modal');
+  modal.classList.add('active');
+  const statsEl = document.getElementById('index-stats');
+  statsEl.textContent = 'Loading...';
+  const stats = await updateIndexStatus();
+  if (!stats) {
+    statsEl.textContent = 'Failed to load index stats.';
+    return;
+  }
+  statsEl.innerHTML = `
+    <div style="display:grid;grid-template-columns:auto 1fr;gap:4px 12px;align-items:center">
+      <span style="color:var(--text-tertiary)">Files indexed</span><strong>${stats.totalFiles}</strong>
+      <span style="color:var(--text-tertiary)">Extracted chunks</span><strong>${stats.totalChunks}</strong>
+      <span style="color:var(--text-tertiary)">Annotations synced</span><strong>${stats.totalAnnotations}</strong>
+      <span style="color:var(--text-tertiary)">Pending extraction</span><strong>${stats.pendingExtraction}</strong>
+      <span style="color:var(--text-tertiary)">Status</span><strong>${stats.indexing ? '⏳ Indexing...' : '✓ Up to date'}</strong>
+      ${stats.lastIndexed ? `<span style="color:var(--text-tertiary)">Last indexed</span><strong>${new Date(stats.lastIndexed).toLocaleString()}</strong>` : ''}
+    </div>
+    <p style="margin-top:12px;font-size:12px;color:var(--text-tertiary)">The search index enables Claude to find information across all your files. It rebuilds automatically when files change.</p>
+  `;
+}
+
+async function reindexProject() {
+  const btn = document.getElementById('btn-reindex');
+  btn.disabled = true;
+  btn.textContent = 'Rebuilding...';
+  document.getElementById('index-dot').className = 'index-dot yellow';
+  try {
+    const result = await api('/api/index/reindex', { method: 'POST' });
+    await showIndexPanel(); // refresh stats
+    btn.textContent = 'Rebuild Index';
+    btn.disabled = false;
+  } catch (e) {
+    btn.textContent = 'Rebuild Index';
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('index-modal').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) e.target.classList.remove('active');
+});
+
+// Poll index status periodically
+setInterval(updateIndexStatus, 15000);
+setTimeout(updateIndexStatus, 2000); // initial check after startup
 
 document.getElementById('btn-settings').addEventListener('click', async () => {
   const settings = await api('/api/settings');
@@ -4967,7 +5075,7 @@ function renderChatMessages() {
   const copyIcon = '<i class="ph ph-copy" style="font-size:12px"></i>';
   let html = '';
   chatHistory.forEach((msg, i) => {
-    const isError = msg.role === 'assistant' && (msg.content.startsWith('Error:') || msg.content.startsWith('Failed to reach'));
+    const isError = msg.isError || (msg.role === 'assistant' && (msg.content.startsWith('Error:') || msg.content.startsWith('Failed to reach')));
     if (msg.role === 'user') {
       html += `<div class="chat-msg user" style="animation-delay:${i * 0.03}s">${escapeHtml(msg.content)}</div>`;
     } else if (isError) {
@@ -5125,7 +5233,17 @@ async function sendChatMessage(text) {
     removeChatTyping();
 
     if (res.error) {
-      chatHistory.push({ role: 'assistant', content: 'Error: ' + res.error });
+      let errMsg = res.error;
+      if (errMsg.includes('rate_limit') || errMsg.includes('429')) {
+        errMsg = 'Rate limited — too many tokens sent too quickly. Wait a moment and try again.';
+      } else if (errMsg.includes('overloaded') || errMsg.includes('529')) {
+        errMsg = 'Claude is overloaded. Try again in a few seconds.';
+      } else {
+        // Strip JSON noise, show just the message
+        const msgMatch = errMsg.match(/"message"\s*:\s*"([^"]+)"/);
+        if (msgMatch) errMsg = msgMatch[1];
+      }
+      chatHistory.push({ role: 'assistant', content: errMsg, isError: true });
     } else {
       const msg = { role: 'assistant', content: res.reply || '' };
       if (res.fileset) msg.fileset = res.fileset;
@@ -5518,6 +5636,7 @@ document.getElementById('chat-send').addEventListener('click', () => {
   const text = input.value.trim();
   if (!text) return;
   input.value = '';
+  input.style.height = '';
   sendChatMessage(text);
 });
 
@@ -5528,9 +5647,99 @@ document.getElementById('chat-input').addEventListener('keydown', (e) => {
     const text = e.target.value.trim();
     if (!text) return;
     e.target.value = '';
+    e.target.style.height = '';
     sendChatMessage(text);
   }
 });
+
+// ── Chat voice input ──
+let chatRecognition = null;
+let chatIsRecording = false;
+let chatTextBeforeRecording = '';
+
+function initChatVoice() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    document.getElementById('chat-mic').style.display = 'none';
+    return;
+  }
+
+  chatRecognition = new SpeechRecognition();
+  chatRecognition.continuous = true;
+  chatRecognition.interimResults = true;
+  chatRecognition.lang = 'en-US';
+
+  chatRecognition.onresult = (e) => {
+    let final = '';
+    let interim = '';
+    for (let i = 0; i < e.results.length; i++) {
+      if (e.results[i].isFinal) {
+        final += e.results[i][0].transcript;
+      } else {
+        interim += e.results[i][0].transcript;
+      }
+    }
+    const input = document.getElementById('chat-input');
+    const sep = chatTextBeforeRecording ? chatTextBeforeRecording + ' ' : '';
+    const cleaned = typeof punctuate === 'function' ? punctuate(final) : final;
+    input.value = sep + cleaned + (interim ? ' ' + interim : '');
+    input.style.height = 'auto';
+    input.style.height = input.scrollHeight + 'px';
+  };
+
+  chatRecognition.onend = () => {
+    if (chatIsRecording) {
+      // Preserve accumulated text before restarting
+      chatTextBeforeRecording = document.getElementById('chat-input').value.trim();
+      chatRecognition.start();
+      return;
+    }
+    chatTextBeforeRecording = '';
+    document.getElementById('chat-mic').classList.remove('recording');
+  };
+
+  chatRecognition.onerror = (e) => {
+    if (e.error === 'no-speech') return;
+    console.error('Chat speech error:', e.error);
+    stopChatRecording();
+  };
+}
+
+function startChatRecording() {
+  if (!chatRecognition) return;
+  chatIsRecording = true;
+  chatTextBeforeRecording = document.getElementById('chat-input').value.trim();
+  chatRecognition.start();
+  document.getElementById('chat-mic').classList.add('recording');
+}
+
+function stopChatRecording(autoSend = false) {
+  if (!chatRecognition) return;
+  chatIsRecording = false;
+  chatRecognition.stop();
+  document.getElementById('chat-mic').classList.remove('recording');
+  if (autoSend) {
+    setTimeout(() => {
+      const input = document.getElementById('chat-input');
+      const text = input.value.trim();
+      if (text) {
+        input.value = '';
+        sendChatMessage(text);
+      }
+    }, 400);
+  }
+}
+
+function toggleChatRecording() {
+  if (chatIsRecording) {
+    stopChatRecording(false); // let user review and send manually
+  } else {
+    startChatRecording();
+  }
+}
+
+document.getElementById('chat-mic').addEventListener('click', toggleChatRecording);
+initChatVoice();
 
 // Suggestion buttons (initial)
 document.querySelectorAll('.chat-suggestion').forEach(btn => {

@@ -3,6 +3,7 @@ import { join, extname, basename, dirname, normalize } from "path";
 import { existsSync } from "fs";
 import sharp from "sharp";
 import JSZip from "jszip";
+import { ConanIndexer } from "./indexer";
 
 const ALLOWED_EXTENSIONS = new Set([
   ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif",
@@ -539,6 +540,21 @@ if (!existsSync(resolvedFolder)) {
   console.error(`Folder not found: ${resolvedFolder}`);
   process.exit(1);
 }
+
+// Initialize the indexer
+const indexer = new ConanIndexer(resolvedFolder);
+
+// Start background indexing
+(async () => {
+  const settings = await readSettings();
+  if (settings.apiKey) indexer.setApiKey(settings.apiKey);
+  console.log("Starting initial index scan...");
+  const result = await indexer.fullScan();
+  console.log(`Index scan complete: ${result.indexed} indexed, ${result.skipped} unchanged, ${result.removed} removed`);
+  indexer.startWatcher();
+  // Process extraction queue if we have an API key
+  if (settings.apiKey) indexer.processExtractionQueue();
+})();
 
 type Region = { x: number; y: number; w: number; h: number };
 type CommentAttachment =
@@ -1099,6 +1115,8 @@ const server = Bun.serve({
       const body = (await req.json()) as { apiKey: string };
       const settings = await readSettings();
       await writeSettings({ ...settings, apiKey: body.apiKey });
+      indexer.setApiKey(body.apiKey || null);
+      if (body.apiKey) indexer.processExtractionQueue();
       return json({ ok: true });
     }
 
@@ -1110,6 +1128,16 @@ const server = Bun.serve({
       // Switch the active folder
       resolvedFolder = newFolder;
       invalidateTreeCache();
+      // Switch indexer to new project
+      indexer.switchProject(newFolder);
+      (async () => {
+        const s = await readSettings();
+        if (s.apiKey) indexer.setApiKey(s.apiKey);
+        const result = await indexer.fullScan();
+        console.log(`Index scan for new folder: ${result.indexed} indexed, ${result.skipped} unchanged, ${result.removed} removed`);
+        indexer.startWatcher();
+        if (s.apiKey) indexer.processExtractionQueue();
+      })();
       // Add to recents
       const settings = await readSettings();
       const recents = (settings.recentFolders || []).filter((f: string) => f !== newFolder);
@@ -1138,6 +1166,16 @@ const server = Bun.serve({
         // Switch to it
         resolvedFolder = selectedPath;
         invalidateTreeCache();
+        // Switch indexer to new project
+        indexer.switchProject(selectedPath);
+        (async () => {
+          const s = await readSettings();
+          if (s.apiKey) indexer.setApiKey(s.apiKey);
+          const r = await indexer.fullScan();
+          console.log(`Index scan for browsed folder: ${r.indexed} indexed, ${r.skipped} unchanged, ${r.removed} removed`);
+          indexer.startWatcher();
+          if (s.apiKey) indexer.processExtractionQueue();
+        })();
         const settings = await readSettings();
         const recents = (settings.recentFolders || []).filter((f: string) => f !== selectedPath);
         recents.unshift(selectedPath);
@@ -1145,6 +1183,36 @@ const server = Bun.serve({
         await writeSettings({ ...settings, recentFolders: recents });
         console.log(`Switched to folder: ${resolvedFolder}`);
         return json({ folder: resolvedFolder });
+      } catch (e: any) {
+        return json({ error: e.message }, 500);
+      }
+    }
+
+    // API: index stats
+    if (path === "/api/index/stats" && req.method === "GET") {
+      return json(indexer.getStats());
+    }
+
+    // API: reindex (full rebuild)
+    if (path === "/api/index/reindex" && req.method === "POST") {
+      try {
+        const result = await indexer.reindex();
+        // Re-run extraction if API key is available
+        const settings = await readSettings();
+        if (settings.apiKey) indexer.processExtractionQueue();
+        return json(result);
+      } catch (e: any) {
+        return json({ error: e.message }, 500);
+      }
+    }
+
+    // API: search index
+    if (path === "/api/index/search" && req.method === "POST") {
+      try {
+        const body = (await req.json()) as { query: string; filters?: any; limit?: number };
+        if (!body.query) return json({ error: "query required" }, 400);
+        const results = indexer.search(body.query, body.filters, body.limit || 10);
+        return json({ results });
       } catch (e: any) {
         return json({ error: e.message }, 500);
       }
@@ -1999,108 +2067,86 @@ Return ONLY your description, no labels or prefixes.`,
 
         if (!userMessage) return json({ error: "message required" }, 400);
 
-        // Always gather context from current directory
-        let annotationDump = "";
-        const allContexts = await collectAllContexts(
-          join(resolvedFolder, chatDir),
-          chatDir
-        );
-
-        for (const { dir, filename, fileCtx } of allContexts) {
-          const displayName = dir ? `${dir}/${filename}` : filename;
-          annotationDump += `\n## ${displayName} (status: ${fileCtx.status})\n`;
-          for (let i = 0; i < fileCtx.comments.length; i++) {
-            const c = fileCtx.comments[i];
-            const regionNote = c.region
-              ? ` (region: ${Math.round(c.region.x)}%-${Math.round(c.region.x + c.region.w)}% x, ${Math.round(c.region.y)}%-${Math.round(c.region.y + c.region.h)}% y)`
-              : "";
-            const attNote = c.attachments?.length ? ` (refs: ${c.attachments.map((a: any) => a.type === 'project' ? a.path : a.originalName).join(', ')})` : "";
-            annotationDump += `- [${c.author.toUpperCase()}, #${i}]${regionNote}${attNote} ${c.text}\n`;
-          }
-        }
-
-        // Gather text documents
-        const textDocs = await collectTextDocuments(
-          join(resolvedFolder, chatDir),
-          chatDir,
-          false
-        );
-        let textDocDump = "";
-        for (const doc of textDocs) {
-          textDocDump += `\n--- ${doc.path} ---\n${doc.content}\n`;
-        }
-
-        // Include ALL files (annotated + unannotated) in listing
-        let fileListing = "\n\n## File Status Overview\n";
-        const { files: allDirFiles } = await listFiles(chatDir);
+        // Lightweight file listing — just names and status, no full annotations
+        let fileListing = "";
+        const { files: allDirFiles, directories: allDirDirs } = await listFiles(chatDir);
         const dirContext = await readContext(chatDir);
+        if (allDirDirs?.length) {
+          fileListing += "Subdirectories: " + allDirDirs.join(", ") + "\n";
+        }
         for (const fn of allDirFiles) {
           const ctx = dirContext[fn] as any;
           const status = ctx?.status || "pending";
           const commentCount = ctx?.comments?.length || 0;
-          fileListing += `- ${fn}: ${status} (${commentCount} comments)${commentCount === 0 ? " — unannotated" : ""}\n`;
+          fileListing += `- ${fn}: ${status} (${commentCount} comments)\n`;
         }
 
-        // Collect thumbnails for multimodal context
-        const { blocks: chatThumbnailBlocks } = await collectThumbnails(chatDir, false);
-
-        // If viewing a specific file, include its full content
+        // If viewing a specific file, include its annotations + content
         let currentFileContext = "";
         if (currentFile) {
           const cfBase = basename(currentFile);
           const cfExt = extname(currentFile).toLowerCase();
-          currentFileContext = `\n\n## CURRENTLY VIEWING: ${currentFile}\nThe user is currently looking at this file in detail view. When they say "this file", they mean "${cfBase}".\n`;
-          // For text files, include full content
+          const { dir: cfDir } = splitRelPath(currentFile);
+          const cfContext = await readContext(cfDir);
+          const cfData = cfContext[cfBase];
+          currentFileContext = `\n\n## CURRENTLY VIEWING: ${currentFile}\nThe user is looking at this file in detail view. "This file" means "${cfBase}".\n`;
+          if (cfData?.comments?.length) {
+            currentFileContext += "\nAnnotations:\n";
+            for (let i = 0; i < cfData.comments.length; i++) {
+              const c = cfData.comments[i];
+              const regionNote = c.region ? ` (region: ${Math.round(c.region.x)}%-${Math.round(c.region.x + c.region.w)}% x)` : "";
+              currentFileContext += `- [${c.author.toUpperCase()}, #${i}]${regionNote} ${c.text}\n`;
+            }
+          }
           if (TEXT_EXTENSIONS.has(cfExt)) {
             try {
               const content = await readFile(safePath(currentFile), "utf-8");
               currentFileContext += `\nFull content:\n${content.slice(0, MAX_DOC_SIZE)}\n`;
             } catch {}
           }
-          // For PDFs, note is available (thumbnail already in blocks)
-          if (cfExt === ".pdf") {
-            currentFileContext += `(PDF content is available via the thumbnail/document block above)\n`;
-          }
         }
 
-        // Build system prompt
+        // Index stats for context
+        const idxStats = indexer.getStats();
+
+        // Build system prompt — lightweight, search-first
         const viewContext = currentFile
           ? `The user is currently viewing the file "${basename(currentFile)}" in detail view.`
           : `The user is currently browsing the "${chatDir || "root"}" directory.`;
 
-        const systemTextPrompt = `You are an assistant embedded in Context Annotator, a tool for annotating images and files from product/design sessions. You have access to all the annotations, file data, and thumbnail images for the user's project.
+        const systemTextPrompt = `You are an assistant embedded in Context Annotator, a tool for annotating images and files from design sessions.
 
-Your job is to answer questions about the annotated files, help identify patterns, suggest next steps, and provide insights. Be specific, reference actual filenames and annotation content. Keep responses concise and useful.
+Your job is to answer questions about annotated files, help identify patterns, suggest next steps, and provide insights. Be specific and concise.
 
-${viewContext} They can ask about the current file, the current directory, or any files across the entire project. Use context clues to determine what they're referring to.
+${viewContext}
 
-IMPORTANT: Annotations are your primary source of truth — they capture human intent and decisions. Thumbnail images provide additional visual context. When annotations exist for a file, weight them more heavily than your visual interpretation. For unannotated files, use the thumbnail to describe what you see.
+## Project info
+The project has ${idxStats.totalFiles} indexed files, ${idxStats.totalAnnotations} annotations, across multiple directories. The current directory contains:
+${fileListing}
+${currentFileContext}
+
+## HOW TO ANSWER QUESTIONS
+
+You have a **search_index** tool that searches a full-text index across ALL ${idxStats.totalFiles} files in the entire project. USE IT LIBERALLY:
+- For ANY question about topics, people, meetings, decisions, or content — search first
+- If the user asks about something not obviously in the file listing above — search
+- If the user mentions a specific meeting, person, or subject — search
+- For cross-cutting questions ("What did we decide about X?") — search
+- You can search multiple times with different queries to find comprehensive answers
+
+NEVER say "I don't see that" or "I can't find that" without searching first. Always search before giving up.
+
+Only skip searching when the user is clearly asking about a specific file they're viewing and you already have its full content above.
 
 ## Reference syntax
-
-When mentioning specific files or comments, use these special link formats so the UI can make them clickable:
-
-- To reference a file/image: [[file:FILENAME]] — e.g. [[file:IMG_5233 2.PNG]] or [[file:subdir/photo.jpg]]
-- To reference a specific comment: [[comment:FILENAME#INDEX]] — e.g. [[comment:IMG_5233 2.PNG#3]] where 3 is the comment index number shown as #N in the data below
-
-Always use these link formats when referring to specific files or comments. Use the exact filenames as they appear in the data below. Do not invent filenames.
-${currentFileContext}
-## Current directory annotation data
-${annotationDump || "(No annotations found)"}
-${fileListing}
-${textDocDump ? `\nText documents in scope:\n${textDocDump}` : ""}`;
+- Reference files: [[file:FILENAME]] — e.g. [[file:IMG_5210.jpeg]] or [[file:Notes/meeting.txt]]
+- Reference comments: [[comment:FILENAME#INDEX]] — e.g. [[comment:IMG_5210.jpeg#3]]
+Use exact filenames from search results or the listing above.`;
 
         // Build messages array with history
         const messages: any[] = [];
         const recentHistory = history.slice(-20);
 
-        // Inject thumbnails as a prefill user message (only on first message, not with history)
-        if (chatThumbnailBlocks.length > 0 && recentHistory.length === 0) {
-          const thumbContent: any[] = [{ type: "text", text: "Here are thumbnail images of the files in scope for visual reference:" }];
-          thumbContent.push(...chatThumbnailBlocks);
-          messages.push({ role: "user", content: thumbContent });
-          messages.push({ role: "assistant", content: "Thanks, I can see the thumbnail images. I'll use these alongside the annotation data to answer your questions. What would you like to know?" });
-        }
         for (const turn of recentHistory) {
           messages.push({ role: turn.role, content: turn.content });
         }
@@ -2148,7 +2194,7 @@ ${textDocDump ? `\nText documents in scope:\n${textDocDump}` : ""}`;
         userContent.push({ type: "text", text: userMessage });
         messages.push({ role: "user", content: userContent.length === 1 ? userMessage : userContent });
 
-        // Tool definition for smart file cards
+        // Tool definitions
         const tools = [
           {
             name: "show_files",
@@ -2168,45 +2214,162 @@ ${textDocDump ? `\nText documents in scope:\n${textDocDump}` : ""}`;
               },
               required: ["files", "description"]
             }
+          },
+          {
+            name: "search_index",
+            description: "Search the project index for files and information matching a query. Use this when the user asks about topics, people, decisions, or commitments that may span many files beyond the current directory. Returns relevant excerpts with file references. Especially useful for large projects with many files.",
+            input_schema: {
+              type: "object",
+              properties: {
+                query: {
+                  type: "string",
+                  description: "Natural language search query — keywords or phrases to find"
+                },
+                filters: {
+                  type: "object",
+                  properties: {
+                    people: { type: "array", items: { type: "string" }, description: "Filter by people mentioned" },
+                    chunk_type: { type: "array", items: { type: "string" }, description: "Filter by type: summary, decision, action_item, commitment, topics, full_text, annotation" },
+                    date_from: { type: "string", description: "ISO date, earliest" },
+                    date_to: { type: "string", description: "ISO date, latest" },
+                    directory: { type: "string", description: "Limit to specific subdirectory" },
+                    file_type: { type: "string", description: "Filter by file type: text, image, pdf" }
+                  }
+                },
+                limit: { type: "number", description: "Max results to return (default 10, max 25)" }
+              },
+              required: ["query"]
+            }
           }
         ];
 
-        const res = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-api-key": settings.apiKey,
-            "anthropic-version": "2023-06-01",
-          },
-          body: JSON.stringify({
-            model: "claude-sonnet-4-20250514",
-            max_tokens: 2048,
-            system: systemTextPrompt,
-            messages,
-            tools,
-          }),
-        });
-
-        if (!res.ok) {
-          const err = await res.text();
-          return json({ error: `Claude API error: ${res.status} ${err}` }, 500);
-        }
-
-        const data = (await res.json()) as any;
-
-        // Extract text and tool_use blocks from response
+        // Multi-turn tool-use loop — Claude calls tools, we execute and continue
+        // 6 rounds allows: search → search → answer, with room for show_files too
+        const MAX_TOOL_ROUNDS = 6;
         let reply = "";
         let fileset: { files: string[]; description: string } | null = null;
+        const MAX_SEARCH_RESULT_CHARS = 8000; // Cap search results to avoid blowing up context
 
-        for (const block of data.content) {
-          if (block.type === "text") {
-            reply += block.text;
-          } else if (block.type === "tool_use" && block.name === "show_files") {
-            fileset = block.input as { files: string[]; description: string };
+        for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+          const apiRes = await fetch("https://api.anthropic.com/v1/messages", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-key": settings.apiKey,
+              "anthropic-version": "2023-06-01",
+            },
+            body: JSON.stringify({
+              model: "claude-sonnet-4-20250514",
+              max_tokens: 2048,
+              system: systemTextPrompt,
+              messages,
+              tools,
+            }),
+          });
+
+          if (!apiRes.ok) {
+            // Retry once on rate limit after waiting
+            if (apiRes.status === 429) {
+              const wait = Math.min(parseInt(apiRes.headers.get("retry-after") || "10"), 30);
+              await new Promise(r => setTimeout(r, wait * 1000));
+              continue; // retry the same round
+            }
+            const err = await apiRes.text();
+            return json({ error: `Claude API error: ${apiRes.status} ${err}` }, 500);
           }
+
+          const data = (await apiRes.json()) as any;
+
+          // Extract text and tool calls from this round
+          let roundText = "";
+          const toolUses: any[] = [];
+          for (const block of data.content) {
+            if (block.type === "text") {
+              roundText += block.text;
+            } else if (block.type === "tool_use") {
+              toolUses.push(block);
+              if (block.name === "show_files") {
+                fileset = block.input as { files: string[]; description: string };
+              }
+            }
+          }
+
+          // Always track the latest text — if this is a final answer it replaces preamble,
+          // if we exhaust rounds we at least have something
+          if (roundText.trim()) reply = roundText;
+
+          // If this is the final response (no more tool calls), we're done
+          if (data.stop_reason !== "tool_use" || toolUses.length === 0) {
+            break;
+          }
+
+          // Execute tool calls
+          messages.push({ role: "assistant", content: data.content });
+          const toolResults: any[] = [];
+
+          for (const tool of toolUses) {
+            if (tool.name === "search_index") {
+              const input = tool.input as { query: string; filters?: any; limit?: number };
+              const searchResults = indexer.search(
+                input.query,
+                input.filters,
+                Math.min(input.limit || 10, 25)
+              );
+              let formatted = searchResults.map(r => {
+                // Truncate individual results to keep total size manageable
+                const content = r.content.length > 2000 ? r.content.slice(0, 2000) + "..." : r.content;
+                return `[${r.chunkType}] ${r.filePath}: ${content}${r.people ? ` (people: ${r.people})` : ""}`;
+              }).join("\n\n");
+              if (formatted.length > MAX_SEARCH_RESULT_CHARS) {
+                formatted = formatted.slice(0, MAX_SEARCH_RESULT_CHARS) + "\n\n[Results truncated]";
+              }
+              toolResults.push({
+                type: "tool_result",
+                tool_use_id: tool.id,
+                content: searchResults.length > 0
+                  ? `Found ${searchResults.length} results:\n\n${formatted}`
+                  : "No results found. Try different keywords.",
+              });
+            } else if (tool.name === "show_files") {
+              toolResults.push({
+                type: "tool_result",
+                tool_use_id: tool.id,
+                content: `File card will be shown with ${(tool.input as any).files.length} files.`,
+              });
+            }
+          }
+
+          messages.push({ role: "user", content: toolResults });
         }
 
-        if (!reply && !fileset) reply = "No response";
+        // If we exhausted all rounds without a final text response, do one last call without tools
+        if (!reply && !fileset) {
+          try {
+            const finalRes = await fetch("https://api.anthropic.com/v1/messages", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "x-api-key": settings.apiKey,
+                "anthropic-version": "2023-06-01",
+              },
+              body: JSON.stringify({
+                model: "claude-sonnet-4-20250514",
+                max_tokens: 2048,
+                system: systemTextPrompt,
+                messages,
+                // No tools — force a text response
+              }),
+            });
+            if (finalRes.ok) {
+              const finalData = (await finalRes.json()) as any;
+              for (const block of finalData.content) {
+                if (block.type === "text") reply += block.text;
+              }
+            }
+          } catch {}
+        }
+
+        if (!reply && !fileset) reply = "Sorry, I wasn't able to generate a response. Try rephrasing your question.";
 
         const result: any = { reply };
         if (fileset) result.fileset = fileset;
