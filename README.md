@@ -20,14 +20,15 @@ Your session folder should contain the images, PDFs, or documents you want to an
 ## Features
 
 ### Annotation Workflow
-- **Grid overview** with filter tabs (All / Pending / Annotated / Skipped) for quick triage
+- **Grid overview** of all files with directory browsing
 - **Gallery mode** for focused annotation — large preview + sidebar with comments
 - **Voice input** with live transcription (Web Speech API) and audio recording saved alongside comments
 - **Punctuation heuristics** that clean up speech-to-text output (capitalization, sentence breaks, proper nouns)
 - **Region annotations** — draw rectangles on images to annotate specific areas; coordinates stored as percentages
 - **Ask Claude** button on any file — sends the image + existing comments to Claude for AI analysis
+- **Ask Claude on regions** — draw a region and ask Claude to describe just that area (cropped server-side with sharp for accuracy)
 - **Auto-annotate** — Claude identifies regions in an image and creates annotated comments for each
-- **Keyboard shortcuts** for fast navigation: arrow keys, `/` to focus comment input, `R` to record, `S` to skip, `Esc` to return to grid
+- **Keyboard shortcuts** for fast navigation: arrow keys, `/` to focus comment input, `R` to record, `Esc` to return to grid
 
 ### Subdirectory Navigation
 - **Browse into subdirectories** — folders appear as grid items at the top of the file grid
@@ -36,7 +37,16 @@ Your session folder should contain the images, PDFs, or documents you want to an
 - **URL hash routing** — directory state persists across browser back/forward
 - **Per-directory data** — each subdirectory has its own `.context.json`, `SUMMARY.md`, thumbnails, and audio
 
+### Chat
+- **Persistent chat panel** on the right side with localStorage-backed session history
+- **File attachments** — attach full images or cropped annotation regions to messages
+- **Smart file cards** — Claude responds with visual file collections (thumbnails, descriptions, zip download)
+- **Right-click "Send to Chat"** on grid items, comments, and region overlays
+- **Drag-to-chat** — drag images from the grid into the chat panel, or drop external files
+- **File picker** shows annotation crops alongside full images for selection
+
 ### Summary Generation
+- **Multimodal summaries** — includes thumbnails from `.thumbs/` for visual context alongside annotations
 - **Per-directory summaries** scoped to the files in the current folder
 - **Aggregate summaries** — generate a root-level summary that spans all subdirectories recursively
 - **Clickable citations** — every summary bullet links back to the specific comment it references; clicking navigates to that comment with a highlight flash
@@ -51,9 +61,15 @@ Your session folder should contain the images, PDFs, or documents you want to an
 - **Reconcile** — scans the full directory tree, matches orphaned annotations to moved files by hash, and migrates them automatically
 - **Clean up** — option to remove orphaned annotations that can't be reconciled
 
+### Export
+- **ML export** — consolidated export to JSONL + COCO detection format with deterministic filenames
+- Produces `crops/`, `originals/`, `annotations.jsonl`, and `coco.json`
+- Filter by author (all, user, claude) and scope (file, directory, root)
+
 ### Architecture
-- **Single HTML file** frontend — no build step, no framework, vanilla JS with marked.js for markdown rendering
+- **Single HTML file** frontend — no build step, no framework, vanilla JS with [Phosphor Icons](https://phosphoricons.com/) and marked.js for markdown rendering
 - **Bun server** (`server.ts`) — serves the app, handles file I/O, proxies Anthropic API calls
+- **Region cropping** — server-side image cropping with [sharp](https://sharp.pixelplumbing.com/) for accurate Claude analysis
 - **Sidecar data** — all annotations stored in `.context.json` next to your files, summaries in `SUMMARY.md` and `.summary-history/`
 - **Auto-refresh polling** — if you edit `.context.json` externally, the UI picks up changes within 2 seconds
 - **API key stored locally** in `.annotator-settings.json` (gitignored)
@@ -124,6 +140,7 @@ your-session-folder/
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/api/files/:path/ask-claude` | AI analysis of a file |
+| `POST` | `/api/files/:path/describe-region` | AI description of a drawn region |
 | `POST` | `/api/files/:path/auto-annotate` | AI region detection + annotation |
 
 ### Summary
@@ -143,6 +160,27 @@ your-session-folder/
 | `GET` | `/api/orphans?dir=subdir` | List orphaned annotations |
 | `POST` | `/api/orphans/clean?dir=subdir` | Remove orphaned annotations |
 | `POST` | `/api/reconcile` | Match + migrate orphaned annotations by content hash |
+
+### Export
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/export` | Export annotated regions as zip (crops, originals, JSONL, COCO) |
+
+### Chat
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/chat` | Send a message to Claude with file/region attachments |
+| `POST` | `/api/download-files` | Download a set of files as a zip |
+
+### Media
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/files/:path/crop` | Serve a cropped region of an image |
+| `GET` | `/api/files/:path/audio` | Upload audio for a file |
+| `GET` | `/api/audio/:path` | Serve an audio file |
 
 ### Other
 
