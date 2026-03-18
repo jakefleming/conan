@@ -42,6 +42,14 @@ CREATE TABLE IF NOT EXISTS files (
   file_type TEXT
 );
 
+CREATE TABLE IF NOT EXISTS file_aliases (
+  id INTEGER PRIMARY KEY,
+  old_path TEXT NOT NULL,
+  new_path TEXT NOT NULL,
+  renamed_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_aliases_old ON file_aliases(old_path);
+
 CREATE TABLE IF NOT EXISTS chunks (
   id INTEGER PRIMARY KEY,
   file_id INTEGER REFERENCES files(id) ON DELETE CASCADE,
@@ -137,7 +145,7 @@ export interface SearchFilters {
 // ── Indexer Class ──
 
 export class ConanIndexer {
-  private db: Database;
+  public db: Database;
   private projectRoot: string;
   private watcher: any = null;
   private indexing = false;
@@ -146,6 +154,10 @@ export class ConanIndexer {
   private apiKey: string | null = null;
   private extractionQueue: string[] = [];
   private extracting = false;
+  // Phase 3: Real-time move detection
+  private recentlyDeleted = new Map<string, { path: string; hash: string; timestamp: number }>();
+  private cleanupInterval: any = null;
+  onFileMoved: ((oldPath: string, newPath: string, hash: string) => Promise<void>) | null = null;
 
   constructor(projectRoot: string) {
     this.projectRoot = projectRoot;
@@ -170,6 +182,29 @@ export class ConanIndexer {
 
   setApiKey(key: string | null) {
     this.apiKey = key;
+  }
+
+  /** Rename a file in the index (used when user renames via UI) */
+  renameFile(oldPath: string, newPath: string) {
+    const name = basename(newPath);
+    const dir = dirname(newPath) === "." ? "" : dirname(newPath);
+    const ext = extname(newPath).toLowerCase();
+    this.db.run(
+      "UPDATE files SET path=?, dir=?, name=?, ext=? WHERE path=?",
+      [newPath, dir, name, ext, oldPath]
+    );
+  }
+
+  /** Get the stored content hash for a file path (from SQLite) */
+  getStoredHash(relPath: string): string | null {
+    const row = this.db.query("SELECT content_hash FROM files WHERE path = ?").get(relPath) as { content_hash: string } | null;
+    return row?.content_hash ?? null;
+  }
+
+  /** Look up a file path by its content hash */
+  findByHash(hash: string): string | null {
+    const row = this.db.query("SELECT path FROM files WHERE content_hash = ?").get(hash) as { path: string } | null;
+    return row?.path ?? null;
   }
 
   // ── Full Scan ──
@@ -370,6 +405,13 @@ export class ConanIndexer {
         if (this.debounceTimer) clearTimeout(this.debounceTimer);
         this.debounceTimer = setTimeout(() => this.processPending(), 1000);
       });
+      // Cleanup stale entries from recentlyDeleted every 5 seconds
+      this.cleanupInterval = setInterval(() => {
+        const cutoff = Date.now() - 5000;
+        for (const [hash, info] of this.recentlyDeleted) {
+          if (info.timestamp < cutoff) this.recentlyDeleted.delete(hash);
+        }
+      }, 5000);
       console.log("Index watcher started");
     } catch (e) {
       console.error("Failed to start file watcher:", e);
@@ -385,27 +427,71 @@ export class ConanIndexer {
       clearTimeout(this.debounceTimer);
       this.debounceTimer = null;
     }
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
+    }
+    this.recentlyDeleted.clear();
   }
 
   private async processPending() {
     const paths = [...this.pendingPaths];
     this.pendingPaths.clear();
 
+    const deletedPaths: string[] = [];
+    const createdPaths: string[] = [];
+
+    // First pass: categorize events
     for (const p of paths) {
       if (p.endsWith(CONTEXT_FILE)) {
-        // Re-sync annotations for this directory
         const dir = dirname(p) === "." ? "" : dirname(p);
         await this.syncAnnotationsForDir(join(this.projectRoot, dir), dir);
       } else {
         const absPath = join(this.projectRoot, p);
         const ext = extname(p).toLowerCase();
-        if (INDEXABLE_EXTENSIONS.has(ext) && existsSync(absPath)) {
-          await this.indexFile(p, absPath);
-        } else if (!existsSync(absPath)) {
-          // File deleted
-          this.db.run("DELETE FROM files WHERE path = ?", [p]);
+        if (!INDEXABLE_EXTENSIONS.has(ext)) continue;
+        if (existsSync(absPath)) {
+          createdPaths.push(p);
+        } else {
+          deletedPaths.push(p);
         }
       }
+    }
+
+    // Phase 3: Detect moves — deleted files go into recentlyDeleted with their hash
+    for (const p of deletedPaths) {
+      const storedHash = this.getStoredHash(p);
+      if (storedHash) {
+        this.recentlyDeleted.set(storedHash, { path: p, hash: storedHash, timestamp: Date.now() });
+      }
+      this.db.run("DELETE FROM files WHERE path = ?", [p]);
+    }
+
+    // Phase 3: Check created files against recently deleted
+    for (const p of createdPaths) {
+      const absPath = join(this.projectRoot, p);
+      // Compute hash for the new file
+      let newHash = "";
+      try {
+        const file = Bun.file(absPath);
+        const slice = file.slice(0, 65536);
+        const data = await slice.arrayBuffer();
+        newHash = createHash("sha256").update(Buffer.from(data)).digest("hex").slice(0, 16);
+      } catch {}
+
+      const match = newHash ? this.recentlyDeleted.get(newHash) : null;
+      if (match && Date.now() - match.timestamp < 5000) {
+        // This is a move/rename! Notify the server to migrate context
+        console.log(`Move detected: ${match.path} → ${p}`);
+        this.recentlyDeleted.delete(newHash);
+        if (this.onFileMoved) {
+          try { await this.onFileMoved(match.path, p, newHash); } catch (e) {
+            console.error("Error handling file move:", e);
+          }
+        }
+      }
+      // Index the new/moved file
+      await this.indexFile(p, absPath);
     }
 
     // Run extraction if queued

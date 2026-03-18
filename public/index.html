@@ -2076,6 +2076,39 @@
   .grid-item[draggable="true"] { cursor: grab; }
   .grid-item[draggable="true"]:active { cursor: grabbing; }
 
+  /* Toast notifications */
+  .toast-container {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    z-index: 10000; display: flex; flex-direction: column; gap: 8px; align-items: center;
+    pointer-events: none;
+  }
+  .toast {
+    background: var(--bg-elevated); border: 1px solid var(--border-color);
+    border-radius: 8px; padding: 10px 16px; font-size: 13px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3); pointer-events: auto;
+    display: flex; align-items: center; gap: 8px;
+    animation: toast-in 0.3s ease;
+    max-width: 400px;
+  }
+  .toast.toast-success { border-color: #22c55e; }
+  .toast.toast-info { border-color: #3b82f6; }
+  .toast-icon { font-size: 16px; flex-shrink: 0; }
+  .toast-success .toast-icon { color: #22c55e; }
+  .toast-info .toast-icon { color: #3b82f6; }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes toast-out { from { opacity: 1; } to { opacity: 0; transform: translateY(10px); } }
+
+  /* Rename inline input */
+  .sidebar-filename.editing {
+    display: flex; align-items: center; gap: 4px;
+  }
+  .rename-input {
+    background: var(--bg-main); border: 1px solid var(--accent);
+    border-radius: 4px; padding: 2px 6px; font-size: 14px; font-weight: 600;
+    color: var(--text-primary); outline: none; width: 100%;
+    letter-spacing: -0.02em;
+  }
+
 </style>
 <script src="https://cdn.jsdelivr.net/npm/marked@14/marked.min.js"></script>
 </head>
@@ -2110,6 +2143,9 @@
 <div class="breadcrumb-bar" id="breadcrumb-bar">
   <span class="breadcrumb-item current" onclick="navigateToDir('')">Root</span>
 </div>
+
+<!-- Toast notifications -->
+<div class="toast-container" id="toast-container"></div>
 
 <!-- Orphan notification banner -->
 <div class="orphan-banner" id="orphan-banner">
@@ -2189,7 +2225,7 @@
   <div class="gallery-sidebar" id="gallery-sidebar">
     <div class="sidebar-resize-handle" id="sidebar-resize-handle"></div>
     <div class="sidebar-header">
-      <div class="sidebar-filename" id="sidebar-filename"></div>
+      <div class="sidebar-filename" id="sidebar-filename" ondblclick="startRename()" title="Double-click to rename"></div>
       <div class="sidebar-header-actions">
         <button class="sidebar-icon-btn" id="btn-reveal-finder" title="Reveal in Finder">
           <i class="ph ph-folder-open" style="font-size:16px"></i>
@@ -2207,6 +2243,10 @@
             <button class="copy-dropdown-item" id="btn-copy-context">
               <i class="ph ph-image-square" style="font-size:14px"></i>
               Copy image + annotations
+            </button>
+            <button class="copy-dropdown-item" id="btn-copy-chat">
+              <i class="ph ph-chat-text" style="font-size:14px"></i>
+              Copy chat
             </button>
           </div>
         </div>
@@ -2529,20 +2569,122 @@ async function reconcileFiles() {
   try {
     const res = await api('/api/reconcile', { method: 'POST' });
     if (res.migrated?.length > 0) {
-      alert(`Migrated ${res.migrated.length} annotation(s).${res.stillOrphaned ? ` ${res.stillOrphaned} still orphaned.` : ''}`);
+      showToast(`📎 Reconnected ${res.migrated.length} file${res.migrated.length > 1 ? 's' : ''}`, 'success');
     } else if (res.stillOrphaned > 0) {
       const clean = confirm(`No matching files found for ${res.stillOrphaned} orphaned annotation(s). Remove them?`);
       if (clean) {
         const dirParam = currentDir ? `?dir=${encodeURIComponent(currentDir)}` : '';
         await api(`/api/orphans/clean${dirParam}`, { method: 'POST' });
+        showToast('Cleaned orphaned annotations', 'success');
       }
+    } else {
+      showToast('No orphaned annotations found', 'info');
     }
     loadFiles();
   } catch (e) {
-    alert('Reconcile failed: ' + e.message);
+    showToast('Reconcile failed: ' + e.message, 'info');
   } finally {
     btn.disabled = false;
     btn.textContent = 'Reconcile';
+  }
+}
+
+// ── Toast notifications ──
+function showToast(message, type = 'info', duration = 4000) {
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  const icon = type === 'success' ? '✓' : 'ℹ';
+  toast.innerHTML = `<span class="toast-icon">${icon}</span><span>${message}</span>`;
+  container.appendChild(toast);
+  setTimeout(() => {
+    toast.style.animation = 'toast-out 0.3s ease forwards';
+    setTimeout(() => toast.remove(), 300);
+  }, duration);
+}
+
+// ── Check for auto-reconcile results on load ──
+async function checkReconcileNotifications() {
+  try {
+    const res = await api('/api/reconcile/last');
+    if (res && res.migrated?.length > 0) {
+      const count = res.migrated.length;
+      showToast(`📎 ${count} file${count > 1 ? 's' : ''} reconnected after move/rename`, 'success', 6000);
+    }
+  } catch {}
+}
+
+// ── Rename file ──
+function startRename() {
+  const fileItems = onlyFiles();
+  if (!fileItems[currentIndex]) return;
+  const file = fileItems[currentIndex];
+  const el = document.getElementById('sidebar-filename');
+  const currentName = file.name;
+  el.classList.add('editing');
+  el.innerHTML = `<input class="rename-input" id="rename-input" value="${currentName.replace(/"/g, '&quot;')}" />`;
+  const input = document.getElementById('rename-input');
+  // Select the name part without extension
+  const dotIndex = currentName.lastIndexOf('.');
+  input.focus();
+  if (dotIndex > 0) {
+    input.setSelectionRange(0, dotIndex);
+  } else {
+    input.select();
+  }
+  input.addEventListener('keydown', async (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      await finishRename(input.value.trim(), file);
+    } else if (e.key === 'Escape') {
+      cancelRename(file);
+    }
+  });
+  input.addEventListener('blur', () => {
+    // Small delay to allow Enter handler to fire first
+    setTimeout(() => {
+      if (document.getElementById('rename-input')) {
+        cancelRename(file);
+      }
+    }, 150);
+  });
+}
+
+function cancelRename(file) {
+  const el = document.getElementById('sidebar-filename');
+  el.classList.remove('editing');
+  el.textContent = file.name;
+}
+
+async function finishRename(newName, file) {
+  const el = document.getElementById('sidebar-filename');
+  el.classList.remove('editing');
+  if (!newName || newName === file.name) {
+    el.textContent = file.name;
+    return;
+  }
+  try {
+    const res = await api(`/api/files/${encodeURIComponent(file.path)}/rename`, {
+      method: 'PUT',
+      body: { newName },
+    });
+    if (res.error) {
+      showToast(res.error, 'info');
+      el.textContent = file.name;
+      return;
+    }
+    showToast(`Renamed to ${newName}`, 'success');
+    await reloadCurrentDir();
+    // Find and navigate to the renamed file
+    const newFiles = onlyFiles();
+    const newIndex = newFiles.findIndex(f => f.name === newName);
+    if (newIndex >= 0) {
+      currentIndex = newIndex;
+      showDetail(newIndex);
+    }
+  } catch (e) {
+    showToast('Rename failed: ' + e.message, 'info');
+    el.textContent = file.name;
   }
 }
 
@@ -3086,6 +3228,31 @@ async function navigateToImage(filePath) {
   if (fileIdx === -1) {
     const baseName = parts[parts.length - 1];
     fileIdx = fileItems.findIndex(f => f.name === baseName);
+  }
+  // If not found, try resolving via alias table (renamed/moved files)
+  if (fileIdx === -1) {
+    try {
+      const baseName = parts[parts.length - 1];
+      // Try full path first, then just filename
+      const queries = [filePath, baseName];
+      for (const q of queries) {
+        const res = await fetch('/api/index/find-file?q=' + encodeURIComponent(q));
+        if (!res.ok) continue;
+        const { results } = await res.json();
+        if (!results || results.length === 0) continue;
+        const match = results[0];
+        const matchPath = match.file_path;
+        const matchDir = matchPath.includes('/') ? matchPath.substring(0, matchPath.lastIndexOf('/')) : '';
+        if (matchDir !== currentDir) {
+          navigateToDir(matchDir);
+          await new Promise(r => setTimeout(r, 300));
+        }
+        const newFileItems = onlyFiles();
+        const matchName = matchPath.split('/').pop();
+        fileIdx = newFileItems.findIndex(f => f.name === matchName || f.path === matchPath);
+        if (fileIdx !== -1) break;
+      }
+    } catch (e) { /* index search failed, fall through to error */ }
   }
   if (fileIdx === -1) {
     showRefError('File not found: ' + filePath);
@@ -4563,6 +4730,41 @@ document.getElementById('btn-copy-context').addEventListener('click', async () =
   }
 });
 
+// ── Copy chat (file comments as markdown transcript) ──
+document.getElementById('btn-copy-chat').addEventListener('click', async () => {
+  const file = onlyFiles()[currentIndex];
+  if (!file) return;
+  const comments = file.comments || [];
+  if (comments.length === 0) {
+    document.getElementById('copy-dropdown').classList.remove('open');
+    showRefError('No comments to copy');
+    return;
+  }
+  const lines = [`# ${file.name}\n`];
+  comments.forEach((c, i) => {
+    const author = c.author === 'claude' ? 'Claude' : 'User';
+    const date = c.ts ? new Date(c.ts).toLocaleDateString() : '';
+    lines.push(`**${author}** ${date ? '(' + date + ')' : ''}`);
+    lines.push(c.text);
+    lines.push('');
+  });
+  const text = lines.join('\n').trim();
+  try {
+    await navigator.clipboard.writeText(text);
+    const btn = document.getElementById('btn-copy-chat');
+    btn.innerHTML = '<i class="ph ph-check" style="font-size:14px;color:var(--green)"></i> Copied!';
+    btn.style.color = 'var(--green)';
+    setTimeout(() => {
+      document.getElementById('copy-dropdown').classList.remove('open');
+      btn.innerHTML = '<i class="ph ph-chat-text" style="font-size:14px"></i> Copy chat';
+      btn.style.color = '';
+    }, 1000);
+  } catch (e) {
+    console.error('Copy chat failed:', e);
+    document.getElementById('copy-dropdown').classList.remove('open');
+  }
+});
+
 // ── Summary Siderail ──
 let summaryRawContent = '';
 let summaryLastModified = null;
@@ -5850,6 +6052,8 @@ initFromHash();
 loadConfig();
 loadFiles();
 checkApiKey();
+// Check for auto-reconcile notifications after a short delay (server startup may still be running)
+setTimeout(checkReconcileNotifications, 3000);
 </script>
 </body>
 </html>

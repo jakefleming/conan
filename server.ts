@@ -1,4 +1,4 @@
-import { readdir, readFile, writeFile, stat, mkdir } from "fs/promises";
+import { readdir, readFile, writeFile, stat, mkdir, rename as fsRename } from "fs/promises";
 import { join, extname, basename, dirname, normalize } from "path";
 import { existsSync } from "fs";
 import sharp from "sharp";
@@ -544,15 +544,99 @@ if (!existsSync(resolvedFolder)) {
 // Initialize the indexer
 const indexer = new ConanIndexer(resolvedFolder);
 
-// Start background indexing
+// Wire up real-time move detection callback
+indexer.onFileMoved = async (oldRelPath: string, newRelPath: string, hash: string) => {
+  const { dir: oldDir, base: oldName } = splitRelPath(oldRelPath);
+  const { dir: newDir, base: newName } = splitRelPath(newRelPath);
+  // Read old context, migrate entry to new location
+  const oldContext = await readContext(oldDir);
+  if (oldContext[oldName]) {
+    const entry = oldContext[oldName];
+    delete oldContext[oldName];
+    await writeContext(oldContext, oldDir);
+    const newContext = await readContext(newDir);
+    newContext[newName] = { ...entry, hash };
+    await writeContext(newContext, newDir);
+    console.log(`Context migrated: ${oldRelPath} → ${newRelPath}`);
+    // Update attachment references across all .context.json files
+    async function updateRefsForMove(dir: string, relPath: string) {
+      const ctx = await readContext(relPath);
+      let changed = false;
+      for (const [, e] of Object.entries(ctx)) {
+        for (const c of (e.comments || [])) {
+          if (!c.attachments) continue;
+          for (const att of c.attachments) {
+            if (att.type === "project" && att.path === oldRelPath) {
+              att.path = newRelPath;
+              changed = true;
+            }
+          }
+        }
+      }
+      if (changed) await writeContext(ctx, relPath);
+      const entries = await readdir(dir, { withFileTypes: true });
+      for (const ent of entries) {
+        if (!ent.isDirectory() || ent.name.startsWith(".") || HIDDEN_DIRS.has(ent.name)) continue;
+        await updateRefsForMove(join(dir, ent.name), relPath ? `${relPath}/${ent.name}` : ent.name);
+      }
+    }
+    await updateRefsForMove(resolvedFolder, "");
+    // Track for UI notification
+    if (!lastReconcileResult) {
+      lastReconcileResult = { migrated: [], stillOrphaned: 0, ts: new Date().toISOString() };
+    }
+    lastReconcileResult.migrated.push({ from: oldRelPath, to: newRelPath, filename: newName });
+    lastReconcileResult.ts = new Date().toISOString();
+    // Record alias + flatten chain (update any old aliases pointing to the old name)
+    try {
+      const now = new Date().toISOString();
+      indexer.db.prepare("UPDATE file_aliases SET new_path = ?, renamed_at = ? WHERE new_path = ?").run(newRelPath, now, oldRelPath);
+      indexer.db.prepare("INSERT INTO file_aliases (old_path, new_path, renamed_at) VALUES (?, ?, ?)").run(oldRelPath, newRelPath, now);
+    } catch (e) { /* ignore */ }
+  }
+};
+
+// Start background indexing + hash backfill + auto-reconcile
 (async () => {
   const settings = await readSettings();
   if (settings.apiKey) indexer.setApiKey(settings.apiKey);
+
+  // Phase 1: Backfill hashes for all files
+  console.log("Backfilling file hashes...");
+  const hashCount = await backfillAllHashes();
+  if (hashCount > 0) console.log(`Backfilled ${hashCount} file hashes`);
+
+  // Phase 2: Auto-reconcile moved/renamed files
+  console.log("Checking for moved/renamed files...");
+  const reconcileResult = await reconcileAll();
+  if (reconcileResult.migrated.length > 0) {
+    console.log(`Auto-reconciled ${reconcileResult.migrated.length} moved/renamed file(s):`);
+    for (const m of reconcileResult.migrated) console.log(`  ${m.from} → ${m.to}`);
+    lastReconcileResult = { ...reconcileResult, ts: new Date().toISOString() };
+  }
+  if (reconcileResult.stillOrphaned > 0) {
+    console.log(`${reconcileResult.stillOrphaned} orphaned annotation(s) remain (no matching files found)`);
+  }
+
+  // Flatten alias chains: if A→B and B→C exist, update A→C
+  try {
+    const stale = indexer.db.prepare(`
+      SELECT a1.id, a1.old_path, a2.new_path AS final_path
+      FROM file_aliases a1
+      JOIN file_aliases a2 ON a1.new_path = a2.old_path
+      WHERE a1.new_path != a2.new_path
+    `).all() as any[];
+    for (const s of stale) {
+      indexer.db.prepare("UPDATE file_aliases SET new_path = ?, renamed_at = ? WHERE id = ?").run(s.final_path, new Date().toISOString(), s.id);
+    }
+    if (stale.length > 0) console.log(`Flattened ${stale.length} alias chain(s)`);
+  } catch (e) { /* ignore */ }
+
+  // Index scan
   console.log("Starting initial index scan...");
   const result = await indexer.fullScan();
   console.log(`Index scan complete: ${result.indexed} indexed, ${result.skipped} unchanged, ${result.removed} removed`);
   indexer.startWatcher();
-  // Process extraction queue if we have an API key
   if (settings.apiKey) indexer.processExtractionQueue();
 })();
 
@@ -576,6 +660,59 @@ async function writeContext(data: ContextData, subdir: string = ""): Promise<voi
   await writeFile(contextPath, JSON.stringify(data, null, 2), "utf-8");
   invalidateTreeCache();
 }
+
+/** Backfill hashes for ALL files in a directory (not just annotated ones) */
+async function backfillHashes(subdir: string = ""): Promise<number> {
+  const dirPath = join(resolvedFolder, subdir);
+  if (!existsSync(dirPath)) return 0;
+  const context = await readContext(subdir);
+  let modified = false;
+  let count = 0;
+
+  try {
+    const entries = await readdir(dirPath, { withFileTypes: true });
+    for (const e of entries) {
+      if (e.name.startsWith(".") || HIDDEN_DIRS.has(e.name)) continue;
+      if (e.isDirectory()) continue;
+      const ext = extname(e.name).toLowerCase();
+      if (!ALLOWED_EXTENSIONS.has(ext)) continue;
+      // Create entry if missing, backfill hash if missing
+      if (!context[e.name]) {
+        context[e.name] = { comments: [], status: "pending" };
+      }
+      if (!context[e.name].hash) {
+        try {
+          context[e.name].hash = await computeFileHash(join(dirPath, e.name));
+          modified = true;
+          count++;
+        } catch {}
+      }
+    }
+    if (modified) await writeContext(context, subdir);
+  } catch {}
+  return count;
+}
+
+/** Recursively backfill hashes for entire project tree */
+async function backfillAllHashes(): Promise<number> {
+  let total = 0;
+  async function walk(dir: string, relPath: string) {
+    total += await backfillHashes(relPath);
+    try {
+      const entries = await readdir(dir, { withFileTypes: true });
+      for (const e of entries) {
+        if (!e.isDirectory() || e.name.startsWith(".") || HIDDEN_DIRS.has(e.name)) continue;
+        const childRel = relPath ? `${relPath}/${e.name}` : e.name;
+        await walk(join(dir, e.name), childRel);
+      }
+    } catch {}
+  }
+  await walk(resolvedFolder, "");
+  return total;
+}
+
+// Store last reconciliation results for UI notifications
+let lastReconcileResult: { migrated: { from: string; to: string; filename: string }[]; stillOrphaned: number; ts: string } | null = null;
 
 async function readSummary(subdir: string = ""): Promise<{ content: string | null; lastModified: string | null }> {
   const summaryPath = join(resolvedFolder, subdir, SUMMARY_FILE);
@@ -1075,11 +1212,98 @@ async function reconcileAll(): Promise<{ migrated: { from: string; to: string; f
         const fromPath = orphan.subdir ? `${orphan.subdir}/${orphan.filename}` : orphan.filename;
         const toPath = relPath ? `${relPath}/${e.name}` : e.name;
         migrated.push({ from: fromPath, to: toPath, filename: e.name });
+        // Record alias so old references can be resolved
+        // Also update any existing aliases that pointed to the old path → now point to new path
+        try {
+          const now = new Date().toISOString();
+          indexer.db.prepare("UPDATE file_aliases SET new_path = ?, renamed_at = ? WHERE new_path = ?").run(toPath, now, fromPath);
+          indexer.db.prepare("INSERT INTO file_aliases (old_path, new_path, renamed_at) VALUES (?, ?, ?)").run(fromPath, toPath, now);
+        } catch (e) { /* table might not exist yet */ }
         orphansByHash.delete(hash);
       }
     }
   }
   await scanFiles(resolvedFolder, "");
+
+  // 3. Update comment attachment references that point to old paths
+  if (migrated.length > 0) {
+    const pathMap = new Map(migrated.map(m => [m.from, m.to]));
+    async function updateAttachmentRefs(dir: string, relPath: string) {
+      const context = await readContext(relPath);
+      let changed = false;
+      for (const [, entry] of Object.entries(context)) {
+        for (const comment of (entry.comments || [])) {
+          if (!comment.attachments) continue;
+          for (const att of comment.attachments) {
+            if (att.type === "project" && pathMap.has(att.path)) {
+              att.path = pathMap.get(att.path)!;
+              changed = true;
+            }
+          }
+        }
+      }
+      if (changed) await writeContext(context, relPath);
+      const entries = await readdir(dir, { withFileTypes: true });
+      for (const e of entries) {
+        if (!e.isDirectory() || e.name.startsWith(".") || HIDDEN_DIRS.has(e.name)) continue;
+        const childRel = relPath ? `${relPath}/${e.name}` : e.name;
+        await updateAttachmentRefs(join(dir, e.name), childRel);
+      }
+    }
+    await updateAttachmentRefs(resolvedFolder, "");
+    console.log(`Updated attachment references for ${migrated.length} moved file(s)`);
+
+    // 4. Rename audio files and update audio paths in comments
+    for (const m of migrated) {
+      const oldBasename = m.from.split("/").pop() || "";
+      const oldNameNoExt = oldBasename.replace(/\.[^.]+$/, "");
+      const newBasename = m.filename;
+      const newNameNoExt = newBasename.replace(/\.[^.]+$/, "");
+      const newDir = m.to.includes("/") ? m.to.substring(0, m.to.lastIndexOf("/")) : "";
+      const newDirAbs = join(resolvedFolder, newDir);
+
+      // Read the migrated entry's context to fix audio paths
+      const ctx = await readContext(newDir);
+      const entry = ctx[newBasename];
+      if (!entry?.comments) continue;
+
+      let ctxChanged = false;
+      for (const comment of entry.comments) {
+        if (!comment.audio) continue;
+        const oldAudio = comment.audio;
+        // Audio files are named like .audio_OLDNAME_timestamp.ogg
+        const newAudio = oldAudio.replace(oldNameNoExt, newNameNoExt);
+        if (newAudio !== oldAudio) {
+          // Rename the actual audio file on disk
+          const oldAudioPath = join(newDirAbs, oldAudio);
+          const newAudioPath = join(newDirAbs, newAudio);
+          if (existsSync(oldAudioPath)) {
+            try {
+              await fsRename(oldAudioPath, newAudioPath);
+              console.log(`  Renamed audio: ${oldAudio} → ${newAudio}`);
+            } catch (err) {
+              console.error(`  Failed to rename audio ${oldAudio}:`, err);
+            }
+          } else {
+            // Audio might be in the old directory if file moved across dirs
+            const oldDirPath = m.from.includes("/") ? m.from.substring(0, m.from.lastIndexOf("/")) : "";
+            const oldAudioAbsPath = join(resolvedFolder, oldDirPath, oldAudio);
+            if (existsSync(oldAudioAbsPath)) {
+              try {
+                await fsRename(oldAudioAbsPath, newAudioPath);
+                console.log(`  Moved+renamed audio: ${oldDirPath}/${oldAudio} → ${newDir}/${newAudio}`);
+              } catch (err) {
+                console.error(`  Failed to move audio ${oldAudio}:`, err);
+              }
+            }
+          }
+          comment.audio = newAudio;
+          ctxChanged = true;
+        }
+      }
+      if (ctxChanged) await writeContext(ctx, newDir);
+    }
+  }
 
   invalidateTreeCache();
   await countAllOrphans(resolvedFolder, "");
@@ -1218,6 +1442,28 @@ const server = Bun.serve({
       }
     }
 
+    // API: find file by name or old alias (for resolving renamed/moved file refs)
+    if (path === "/api/index/find-file" && req.method === "GET") {
+      try {
+        const q = url.searchParams.get("q") || "";
+        if (!q) return json({ results: [] });
+        // First check aliases (exact match on old_path)
+        const aliasStmt = indexer.db.prepare("SELECT new_path FROM file_aliases WHERE old_path = ? ORDER BY renamed_at DESC LIMIT 1");
+        const alias = aliasStmt.get(q) as any;
+        if (alias) return json({ results: [{ file_path: alias.new_path, file_name: alias.new_path.split("/").pop() }] });
+        // Also try matching just the filename part of old_path
+        const aliasStmt2 = indexer.db.prepare("SELECT new_path FROM file_aliases WHERE old_path LIKE ? ORDER BY renamed_at DESC LIMIT 1");
+        const alias2 = aliasStmt2.get(`%${q}`) as any;
+        if (alias2) return json({ results: [{ file_path: alias2.new_path, file_name: alias2.new_path.split("/").pop() }] });
+        // Fall back to partial filename match in files table
+        const stmt = indexer.db.prepare("SELECT file_path AS file_path, file_name AS file_name FROM files WHERE file_name LIKE ? LIMIT 5");
+        const results = stmt.all(`%${q}%`);
+        return json({ results });
+      } catch (e: any) {
+        return json({ results: [] });
+      }
+    }
+
     // API: directory tree
     if (path === "/api/tree" && req.method === "GET") {
       const tree = await getTree();
@@ -1265,7 +1511,66 @@ const server = Bun.serve({
     if (path === "/api/reconcile" && req.method === "POST") {
       try {
         const result = await reconcileAll();
+        lastReconcileResult = { ...result, ts: new Date().toISOString() };
         return json(result);
+      } catch (e: any) {
+        return json({ error: e.message }, 500);
+      }
+    }
+
+    // API: get last reconcile result (for UI notification)
+    if (path === "/api/reconcile/last" && req.method === "GET") {
+      if (lastReconcileResult) {
+        const result = lastReconcileResult;
+        lastReconcileResult = null; // consume it
+        return json(result);
+      }
+      return json(null);
+    }
+
+    // API: rename a file (preserving context)
+    const renameMatch = path.match(/^\/api\/files\/(.+)\/rename$/);
+    if (renameMatch && req.method === "PUT") {
+      const relPath = decodeURIComponent(renameMatch[1]);
+      const { dir, base: oldName } = splitRelPath(relPath);
+      try { safePath(relPath); } catch { return json({ error: "Invalid path" }, 400); }
+      const body = (await req.json()) as { newName: string };
+      const newName = body.newName?.trim();
+      if (!newName || newName.includes("/") || newName.includes("\\")) {
+        return json({ error: "Invalid filename" }, 400);
+      }
+      const oldPath = join(resolvedFolder, dir, oldName);
+      const newPath = join(resolvedFolder, dir, newName);
+      if (!existsSync(oldPath)) return json({ error: "File not found" }, 404);
+      if (existsSync(newPath)) return json({ error: "A file with that name already exists" }, 409);
+
+      try {
+        // 1. Rename the physical file
+        await fsRename(oldPath, newPath);
+        // 2. Migrate context entry
+        const context = await readContext(dir);
+        if (context[oldName]) {
+          context[newName] = { ...context[oldName] };
+          // Update hash for renamed file
+          try { context[newName].hash = await computeFileHash(newPath); } catch {}
+          delete context[oldName];
+          await writeContext(context, dir);
+        }
+        // 3. Rename thumbnail if it exists
+        const ext = extname(oldName).toLowerCase();
+        const oldThumb = join(resolvedFolder, dir, ".thumbs", `${basename(oldName, ext)}.jpg`);
+        const newThumb = join(resolvedFolder, dir, ".thumbs", `${basename(newName, extname(newName).toLowerCase())}.jpg`);
+        if (existsSync(oldThumb)) {
+          try { await fsRename(oldThumb, newThumb); } catch {}
+        }
+        // 4. Update SQLite index
+        const oldRelPath = dir ? `${dir}/${oldName}` : oldName;
+        const newRelPath = dir ? `${dir}/${newName}` : newName;
+        try {
+          indexer.renameFile(oldRelPath, newRelPath);
+        } catch {}
+        invalidateTreeCache();
+        return json({ ok: true, newPath: newRelPath });
       } catch (e: any) {
         return json({ error: e.message }, 500);
       }
@@ -1453,10 +1758,11 @@ Return ONLY your description, no labels or prefixes.`,
         const { files: fileNames, directories } = await listFiles(dirParam);
         const context = await readContext(dirParam);
 
-        // Backfill hashes for annotated files that don't have one yet
+        // Backfill hashes for ALL files in this directory
         let contextModified = false;
         for (const name of fileNames) {
-          if (context[name]?.comments?.length && !context[name].hash) {
+          if (!context[name]) context[name] = { comments: [], status: "pending" };
+          if (!context[name].hash) {
             try {
               context[name].hash = await computeFileHash(join(resolvedFolder, dirParam, name));
               contextModified = true;

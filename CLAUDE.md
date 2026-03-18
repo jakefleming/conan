@@ -78,6 +78,12 @@ Each subdirectory is self-contained with its own:
 ### File move handling
 - `GET /api/orphans?dir=subdir` — List annotations in `.context.json` that don't match any file on disk
 - `POST /api/reconcile` — Scan entire tree, match orphaned annotations to moved files by content hash, migrate automatically
+- `GET /api/index/find-file?q=filename` — Resolve renamed/moved files via alias table. Returns current path for old filenames.
+
+### SQLite Index
+- `GET /api/index/stats` — Index stats (file count, chunks, annotations, pending extraction)
+- `POST /api/index/reindex` — Full rebuild of the SQLite index
+- `POST /api/index/search` — Full-text search. Body: `{ query: "...", filters?: { people?, chunk_type?, date_from?, date_to?, directory?, file_type? }, limit?: 10 }`
 
 ### Export
 - `POST /api/export` — Export annotated regions as a zip. Body: `{ scope: "file"|"directory"|"root", path: "...", authorFilter?: "all"|"user"|"claude" }`
@@ -127,9 +133,23 @@ curl -X POST "http://localhost:3333/api/summary/generate?aggregate=true"
 
 Or edit `.context.json` directly — the UI will pick up changes on next load.
 
+## File resilience
+
+Files can be renamed or moved without losing annotations. The system uses content hashing (SHA-256 of first 64KB) to detect moved/renamed files:
+
+1. **Fingerprinting:** Each annotated file gets a `hash` field in `.context.json`
+2. **Auto-reconciliation:** On startup, orphaned annotations (file missing) are matched to new files by hash
+3. **Real-time watcher:** Rename/move events detected live while server runs
+4. **Alias table:** `file_aliases` in SQLite tracks old→new path mappings, chains are flattened (A→B then B→C becomes A→C, B→C)
+5. **Audio files:** `.audio_*` files are renamed alongside their parent file
+6. **Comment attachments:** Cross-references in other files' comments are updated
+7. **In-app rename:** Rename button in file detail sidebar header
+
 ## Tech stack
 - **Server:** Bun + TypeScript (`server.ts`)
+- **Indexer:** SQLite via `bun:sqlite` (`indexer.ts`) — FTS5 full-text search, file watcher, Claude extraction pipeline
 - **Frontend:** Single HTML file with vanilla JS (`public/index.html`)
 - **Canvas:** SVG overlay sharing CSS transform with image for zoom/pan/rotation
 - **Annotations:** Region coordinates stored as percentages (x, y, w, h) of image dimensions
 - **File identity:** Content hashing (SHA-256 of first 64KB) for detecting moved/renamed files
+- **Index DB:** `.conan.db` in project root — tables: `files`, `chunks`, `annotations`, `file_aliases` + FTS5 virtual tables
