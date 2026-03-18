@@ -1357,6 +1357,15 @@ async function handleRequest(req: Request): Promise<Response> {
       return new Response(file, { headers: { "Content-Type": "text/html" } });
     }
 
+    // Serve JS modules from public/js/
+    if (path.startsWith("/js/") && path.endsWith(".js")) {
+      const jsFile = Bun.file(join(import.meta.dir, "public", path));
+      if (await jsFile.exists()) {
+        return new Response(jsFile, { headers: { "Content-Type": "application/javascript" } });
+      }
+      return new Response("Not Found", { status: 404 });
+    }
+
     // API: config
     if (path === "/api/config") {
       const settings = await readSettings();
@@ -2630,14 +2639,12 @@ Use exact filenames from search results or the listing above.`;
             }
           }
 
-          // Always track the latest text — if this is a final answer it replaces preamble,
-          // if we exhaust rounds we at least have something
-          if (roundText.trim()) reply = roundText;
-
-          // If this is the final response (no more tool calls), we're done
+          // If this is the final response (no more tool calls), use this text as the reply
           if (data.stop_reason !== "tool_use" || toolUses.length === 0) {
+            if (roundText.trim()) reply = roundText;
             break;
           }
+          // Otherwise this is intermediate "thinking" text — discard it
 
           // Execute tool calls
           messages.push({ role: "assistant", content: data.content });
@@ -2701,8 +2708,13 @@ Use exact filenames from search results or the listing above.`;
               for (const block of finalData.content) {
                 if (block.type === "text") reply += block.text;
               }
+            } else {
+              const errBody = await finalRes.text();
+              console.error("Final toolless call failed:", finalRes.status, errBody.slice(0, 300));
             }
-          } catch {}
+          } catch (finalErr: any) {
+            console.error("Final toolless call error:", finalErr.message);
+          }
         }
 
         if (!reply && !fileset) reply = "Sorry, I wasn't able to generate a response. Try rephrasing your question.";
