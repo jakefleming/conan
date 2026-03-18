@@ -648,6 +648,17 @@ type Comment = { author: "user" | "claude"; text: string; ts: string; audio?: st
 type FileContext = { comments: Comment[]; status: "pending" | "annotated" | "skipped"; hash?: string };
 type ContextData = Record<string, FileContext>;
 
+// Per-directory write lock to prevent concurrent read-modify-write races on .context.json
+const contextLocks = new Map<string, Promise<void>>();
+
+function withContextLock<T>(subdir: string, fn: () => Promise<T>): Promise<T> {
+  const key = subdir || "__root__";
+  const prev = contextLocks.get(key) || Promise.resolve();
+  const next = prev.then(fn, fn); // run fn after previous completes (even if it failed)
+  contextLocks.set(key, next.then(() => {}, () => {})); // swallow errors in the chain
+  return next;
+}
+
 async function readContext(subdir: string = ""): Promise<ContextData> {
   const contextPath = join(resolvedFolder, subdir, CONTEXT_FILE);
   if (!existsSync(contextPath)) return {};
@@ -659,6 +670,16 @@ async function writeContext(data: ContextData, subdir: string = ""): Promise<voi
   const contextPath = join(resolvedFolder, subdir, CONTEXT_FILE);
   await writeFile(contextPath, JSON.stringify(data, null, 2), "utf-8");
   invalidateTreeCache();
+}
+
+/** Locked read-modify-write: reads context, calls mutator, writes back. Prevents concurrent clobbering. */
+async function updateContext(subdir: string, mutator: (ctx: ContextData) => void | Promise<void>): Promise<ContextData> {
+  return withContextLock(subdir, async () => {
+    const ctx = await readContext(subdir);
+    await mutator(ctx);
+    await writeContext(ctx, subdir);
+    return ctx;
+  });
 }
 
 /** Backfill hashes for ALL files in a directory (not just annotated ones) */
@@ -1311,9 +1332,21 @@ async function reconcileAll(): Promise<{ migrated: { from: string; to: string; f
 }
 
 const server = Bun.serve({
+  hostname: "127.0.0.1", // localhost only — not exposed to network
   port: PORT,
   idleTimeout: 120, // Claude API calls with large images can take a while
   async fetch(req) {
+    try { return await handleRequest(req); }
+    catch (e: any) {
+      console.error("Unhandled error:", e);
+      return new Response(JSON.stringify({ error: e.message || "Internal server error" }), {
+        status: 500, headers: { "Content-Type": "application/json" }
+      });
+    }
+  },
+});
+
+async function handleRequest(req: Request): Promise<Response> {
     const url = new URL(req.url);
     const path = url.pathname;
     const dirParam = url.searchParams.get("dir") ?? "";
@@ -1958,16 +1991,6 @@ Return ONLY your description, no labels or prefixes.`,
       const body = (await req.json()) as { author: string; text: string; audio?: string; region?: Region; attachments?: CommentAttachment[] };
       if (!body.text?.trim() && (!body.attachments || body.attachments.length === 0)) return json({ error: "Empty comment" }, 400);
 
-      const context = await readContext(dir);
-      if (!context[base]) {
-        context[base] = { comments: [], status: "pending" };
-      }
-      // Compute hash on first annotation if missing
-      if (!context[base].hash) {
-        try {
-          context[base].hash = await computeFileHash(join(resolvedFolder, relPath));
-        } catch {}
-      }
       const comment: Comment = {
         author: (body.author === "claude" ? "claude" : "user") as "user" | "claude",
         text: (body.text || "").trim(),
@@ -1976,10 +1999,15 @@ Return ONLY your description, no labels or prefixes.`,
       if (body.audio) comment.audio = body.audio;
       if (body.region) comment.region = body.region;
       if (body.attachments && body.attachments.length > 0) comment.attachments = body.attachments;
-      context[base].comments.push(comment);
-      context[base].status = "annotated";
-      await writeContext(context, dir);
-      return json(context[base]);
+      const ctx = await updateContext(dir, async (context) => {
+        if (!context[base]) context[base] = { comments: [], status: "pending" };
+        if (!context[base].hash) {
+          try { context[base].hash = await computeFileHash(join(resolvedFolder, relPath)); } catch {}
+        }
+        context[base].comments.push(comment);
+        context[base].status = "annotated";
+      });
+      return json(ctx[base]);
     }
 
     // API: update status
@@ -1992,13 +2020,11 @@ Return ONLY your description, no labels or prefixes.`,
       const validStatuses = ["pending", "annotated", "skipped"];
       if (!validStatuses.includes(body.status)) return json({ error: "Invalid status" }, 400);
 
-      const context = await readContext(dir);
-      if (!context[base]) {
-        context[base] = { comments: [], status: "pending" };
-      }
-      context[base].status = body.status as FileContext["status"];
-      await writeContext(context, dir);
-      return json(context[base]);
+      const ctx = await updateContext(dir, (context) => {
+        if (!context[base]) context[base] = { comments: [], status: "pending" };
+        context[base].status = body.status as FileContext["status"];
+      });
+      return json(ctx[base]);
     }
 
     // API: delete comment
@@ -2008,15 +2034,15 @@ Return ONLY your description, no labels or prefixes.`,
       const { dir, base } = splitRelPath(relPath);
       try { safePath(relPath); } catch { return json({ error: "Invalid path" }, 400); }
       const index = parseInt(deleteCommentMatch[2], 10);
-      const context = await readContext(dir);
-      if (!context[base]) return json({ error: "Not found" }, 404);
-      if (index < 0 || index >= context[base].comments.length) return json({ error: "Invalid index" }, 400);
-      context[base].comments.splice(index, 1);
-      if (context[base].comments.length === 0) {
-        context[base].status = "pending";
-      }
-      await writeContext(context, dir);
-      return json(context[base]);
+      let error: string | null = null;
+      const ctx = await updateContext(dir, (context) => {
+        if (!context[base]) { error = "Not found"; return; }
+        if (index < 0 || index >= context[base].comments.length) { error = "Invalid index"; return; }
+        context[base].comments.splice(index, 1);
+        if (context[base].comments.length === 0) context[base].status = "pending";
+      });
+      if (error) return json({ error }, error === "Not found" ? 404 : 400);
+      return json(ctx[base]);
     }
 
     // API: update a comment's region
@@ -2027,11 +2053,13 @@ Return ONLY your description, no labels or prefixes.`,
       try { safePath(relPath); } catch { return json({ error: "Invalid path" }, 400); }
       const index = parseInt(regionMatch[2], 10);
       const body = (await req.json()) as { region: Region };
-      const context = await readContext(dir);
-      if (!context[base]) return json({ error: "Not found" }, 404);
-      if (index < 0 || index >= context[base].comments.length) return json({ error: "Invalid index" }, 400);
-      context[base].comments[index].region = body.region;
-      await writeContext(context, dir);
+      let error: string | null = null;
+      await updateContext(dir, (context) => {
+        if (!context[base]) { error = "Not found"; return; }
+        if (index < 0 || index >= context[base].comments.length) { error = "Invalid index"; return; }
+        context[base].comments[index].region = body.region;
+      });
+      if (error) return json({ error }, error === "Not found" ? 404 : 400);
       return json({ ok: true });
     }
 
@@ -2043,11 +2071,13 @@ Return ONLY your description, no labels or prefixes.`,
       try { safePath(relPath); } catch { return json({ error: "Invalid path" }, 400); }
       const index = parseInt(textMatch[2], 10);
       const body = (await req.json()) as { text: string };
-      const context = await readContext(dir);
-      if (!context[base]) return json({ error: "Not found" }, 404);
-      if (index < 0 || index >= context[base].comments.length) return json({ error: "Invalid index" }, 400);
-      context[base].comments[index].text = body.text;
-      await writeContext(context, dir);
+      let error: string | null = null;
+      await updateContext(dir, (context) => {
+        if (!context[base]) { error = "Not found"; return; }
+        if (index < 0 || index >= context[base].comments.length) { error = "Invalid index"; return; }
+        context[base].comments[index].text = body.text;
+      });
+      if (error) return json({ error }, error === "Not found" ? 404 : 400);
       return json({ ok: true });
     }
 
@@ -2686,8 +2716,7 @@ Use exact filenames from search results or the listing above.`;
     }
 
     return new Response("Not Found", { status: 404 });
-  },
-});
+}
 
 console.log(`Context Annotator running at http://localhost:${PORT}`);
 console.log(`Watching folder: ${resolvedFolder}`);
