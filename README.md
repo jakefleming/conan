@@ -39,8 +39,12 @@ Your session folder should contain the images, PDFs, or documents you want to an
 
 ### Chat
 - **Persistent chat panel** on the right side with localStorage-backed session history
+- **Search-first architecture** — Claude uses FTS5 full-text search to find relevant content across all directories instead of loading everything upfront
+- **Multi-turn tool use** — Claude can search, reason, and refine across up to 6 rounds per message
 - **File attachments** — attach full images or cropped annotation regions to messages
+- **Voice input** — mic button for speech-to-text in both file chat and folder chat
 - **Smart file cards** — Claude responds with visual file collections (thumbnails, descriptions, zip download)
+- **Copy chat** — copy all file comments as a markdown transcript from the copy dropdown
 - **Right-click "Send to Chat"** on grid items, comments, and region overlays
 - **Drag-to-chat** — drag images from the grid into the chat panel, or drop external files
 - **File picker** shows annotation crops alongside full images for selection
@@ -55,20 +59,31 @@ Your session folder should contain the images, PDFs, or documents you want to an
 - **Edit mode** — manually edit the rendered summary markdown in-place
 - **Copy to clipboard** — one-click copy of the raw markdown
 
-### File Move Handling
-- **Content hashing** — SHA-256 of the first 64KB of each annotated file, used to detect moved or renamed files
-- **Orphan detection** — if a file is deleted or moved, a banner alerts you that annotations don't match any file
-- **Reconcile** — scans the full directory tree, matches orphaned annotations to moved files by hash, and migrates them automatically
-- **Clean up** — option to remove orphaned annotations that can't be reconciled
+### File Resilience (Move/Rename Protection)
+- **Content fingerprinting** — SHA-256 of the first 64KB of each annotated file, stored in `.context.json`
+- **Auto-reconciliation** — on startup, orphaned annotations are automatically matched to moved/renamed files by content hash
+- **Real-time watcher** — rename/move events detected live while the server runs
+- **Alias tracking** — SQLite `file_aliases` table maps old→new paths; chains are flattened (A→B then B→C becomes A→C)
+- **Audio file migration** — `.audio_*` files are renamed alongside their parent file
+- **Comment attachment updates** — cross-references in other files' comments are updated when a file moves
+- **In-app rename** — rename button in the file detail sidebar header
+- **Resilient chat links** — old file references in chat resolve via the alias table
 
 ### Export
 - **ML export** — consolidated export to JSONL + COCO detection format with deterministic filenames
 - Produces `crops/`, `originals/`, `annotations.jsonl`, and `coco.json`
 - Filter by author (all, user, claude) and scope (file, directory, root)
 
+### SQLite Index
+- **FTS5 full-text search** — all text files and annotations indexed for instant search across the project
+- **File watcher** — live re-indexing when files change on disk
+- **Index status indicator** — database icon in topbar shows indexing state (green/yellow/gray)
+- **Reindex button** — full rebuild from the index stats panel
+
 ### Architecture
 - **Single HTML file** frontend — no build step, no framework, vanilla JS with [Phosphor Icons](https://phosphoricons.com/) and marked.js for markdown rendering
 - **Bun server** (`server.ts`) — serves the app, handles file I/O, proxies Anthropic API calls
+- **SQLite indexer** (`indexer.ts`) — FTS5 search index via `bun:sqlite`, file watcher, alias tracking
 - **Region cropping** — server-side image cropping with [sharp](https://sharp.pixelplumbing.com/) for accurate Claude analysis
 - **Sidecar data** — all annotations stored in `.context.json` next to your files, summaries in `SUMMARY.md` and `.summary-history/`
 - **Auto-refresh polling** — if you edit `.context.json` externally, the UI picks up changes within 2 seconds
@@ -87,6 +102,7 @@ Your session folder should contain the images, PDFs, or documents you want to an
 ```
 context-annotator/
   server.ts          # Bun HTTP server (API + static serving)
+  indexer.ts         # SQLite FTS5 indexer + file watcher
   public/
     index.html       # Single-page frontend (CSS + JS + HTML)
   package.json
@@ -100,6 +116,7 @@ Each directory is self-contained:
 ```
 your-session-folder/
   .context.json            # Annotations for files in this directory
+  .conan.db                # SQLite index (FTS5 search, file aliases)
   .summary-history/        # Versioned summaries (v1.md, v2.md, ...)
   .thumbs/                 # Cached thumbnails
   .audio_*.ogg/.webm       # Voice recording files
@@ -160,6 +177,15 @@ your-session-folder/
 | `GET` | `/api/orphans?dir=subdir` | List orphaned annotations |
 | `POST` | `/api/orphans/clean?dir=subdir` | Remove orphaned annotations |
 | `POST` | `/api/reconcile` | Match + migrate orphaned annotations by content hash |
+| `GET` | `/api/index/find-file?q=name` | Resolve old filenames via alias table |
+
+### SQLite Index
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/index/stats` | Index stats (files, chunks, annotations) |
+| `POST` | `/api/index/reindex` | Full rebuild of the search index |
+| `POST` | `/api/index/search` | Full-text search across all indexed content |
 
 ### Export
 
