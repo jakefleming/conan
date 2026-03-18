@@ -10,6 +10,7 @@ import { readdir, readFile, stat, watch } from "fs/promises";
 import { join, extname, basename, dirname } from "path";
 import { existsSync } from "fs";
 import { createHash } from "crypto";
+import * as XLSX from "xlsx";
 
 const HIDDEN_DIRS = new Set([".thumbs", ".summary-history", ".git", ".DS_Store", ".attachments", "node_modules", "__pycache__", ".venv", "venv", ".next", "dist", "build"]);
 const CONTEXT_FILE = ".context.json";
@@ -19,8 +20,10 @@ const TEXT_EXTENSIONS = new Set([
   ".toml", ".ini", ".log", ".html", ".css", ".js", ".ts", ".py",
   ".rb", ".sh", ".sql", ".rtf",
 ]);
+const SPREADSHEET_EXTENSIONS = new Set([".xlsx", ".xls", ".ods", ".numbers"]);
 const INDEXABLE_EXTENSIONS = new Set([
   ...TEXT_EXTENSIONS,
+  ...SPREADSHEET_EXTENSIONS,
   ".pdf", ".doc", ".docx",
   ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif", ".svg",
 ]);
@@ -297,6 +300,7 @@ export class ConanIndexer {
     // Determine file type
     let fileType = "other";
     if (TEXT_EXTENSIONS.has(ext)) fileType = "text";
+    else if (SPREADSHEET_EXTENSIONS.has(ext)) fileType = "spreadsheet";
     else if (ext === ".pdf") fileType = "pdf";
     else if ([".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif", ".svg"].includes(ext)) fileType = "image";
 
@@ -329,8 +333,31 @@ export class ConanIndexer {
       } catch {}
     }
 
-    // Queue for Claude extraction (text and pdf files)
-    if ((fileType === "text" || fileType === "pdf") && !this.extractionQueue.includes(relPath)) {
+    // Extract spreadsheet content as per-sheet chunks
+    if (fileType === "spreadsheet") {
+      try {
+        const buffer = await readFile(absPath);
+        const workbook = XLSX.read(buffer, { type: "buffer" });
+        for (const sheetName of workbook.SheetNames) {
+          const sheet = workbook.Sheets[sheetName];
+          const rows: string[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" }) as string[][];
+          // Convert to TSV format for FTS indexing
+          const tsvContent = rows.map(row => row.join("\t")).join("\n");
+          const trimmed = tsvContent.slice(0, MAX_TEXT_SIZE);
+          if (trimmed.trim()) {
+            this.db.run(
+              "INSERT INTO chunks (file_id, chunk_type, content, created_at) VALUES (?,?,?,?)",
+              [fileId, "sheet", `[Sheet: ${sheetName}]\n${trimmed}`, new Date().toISOString()]
+            );
+          }
+        }
+      } catch (e: any) {
+        console.error(`Failed to parse spreadsheet ${relPath}:`, e.message);
+      }
+    }
+
+    // Queue for Claude extraction (text, pdf, and spreadsheet files)
+    if ((fileType === "text" || fileType === "pdf" || fileType === "spreadsheet") && !this.extractionQueue.includes(relPath)) {
       this.extractionQueue.push(relPath);
     }
 

@@ -10,10 +10,13 @@ function cssVar(name) {
 }
 
 const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif', '.svg'];
-const TEXT_EXTS = ['.txt', '.md', '.json', '.csv', '.tsv', '.log', '.yml', '.yaml', '.toml', '.xml', '.html', '.css', '.js', '.ts', '.py', '.sh', '.bash', '.zsh', '.env', '.ini', '.cfg', '.conf'];
+const TEXT_EXTS = ['.txt', '.md', '.json', '.log', '.yml', '.yaml', '.toml', '.xml', '.html', '.css', '.js', '.ts', '.py', '.sh', '.bash', '.zsh', '.env', '.ini', '.cfg', '.conf'];
+const SPREADSHEET_EXTS = ['.xlsx', '.xls', '.csv', '.tsv', '.ods', '.numbers'];
 const FILE_ICONS = {
   '.pdf': '📄', '.txt': '📝', '.md': '📝',
   '.doc': '📃', '.docx': '📃',
+  '.xlsx': '📊', '.xls': '📊', '.ods': '📊', '.numbers': '📊',
+  '.csv': '📊', '.tsv': '📊',
 };
 
 // ── API helpers ──

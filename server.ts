@@ -4,6 +4,7 @@ import { existsSync } from "fs";
 import sharp from "sharp";
 import JSZip from "jszip";
 import { ConanIndexer } from "./indexer";
+import * as XLSX from "xlsx";
 
 const ALLOWED_EXTENSIONS = new Set([
   ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif",
@@ -11,6 +12,7 @@ const ALLOWED_EXTENSIONS = new Set([
   ".txt", ".md", ".doc", ".docx",
   ".json", ".csv", ".tsv", ".log", ".yml", ".yaml", ".toml", ".xml",
   ".html", ".css", ".js", ".ts", ".py", ".sh",
+  ".xlsx", ".xls", ".ods", ".numbers",
 ]);
 
 const MIME_TYPES: Record<string, string> = {
@@ -23,6 +25,9 @@ const MIME_TYPES: Record<string, string> = {
   ".xml": "text/xml", ".html": "text/html", ".css": "text/css",
   ".js": "text/javascript", ".ts": "text/plain", ".py": "text/plain", ".sh": "text/plain",
   ".doc": "application/msword", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".xls": "application/vnd.ms-excel", ".ods": "application/vnd.oasis.opendocument.spreadsheet",
+  ".numbers": "application/x-iwork-keynote-sffnumbers",
 };
 
 const CONTEXT_FILE = ".context.json";
@@ -1918,6 +1923,45 @@ Return ONLY your description, no labels or prefixes.`,
           "Access-Control-Allow-Origin": "*",
         },
       });
+    }
+
+    // API: spreadsheet data (parsed JSON for table rendering)
+    const spreadsheetMatch = path.match(/^\/api\/files\/(.+)\/spreadsheet$/);
+    if (spreadsheetMatch && req.method === "GET") {
+      const relPath = decodeURIComponent(spreadsheetMatch[1]);
+      let filePath: string;
+      try { filePath = safePath(relPath); } catch { return json({ error: "Invalid path" }, 400); }
+      if (!existsSync(filePath)) return json({ error: "Not found" }, 404);
+
+      try {
+        const fileStat = await stat(filePath);
+        if (fileStat.size > 20_000_000) return json({ error: "File too large (>20MB)" }, 400);
+
+        const buffer = await readFile(filePath);
+        const workbook = XLSX.read(buffer, { type: "buffer" });
+        const MAX_ROWS = 500;
+
+        const sheets = workbook.SheetNames.map(name => {
+          const sheet = workbook.Sheets[name];
+          const rows: string[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" }) as string[][];
+          const totalRows = rows.length;
+          const headers = rows.length > 0 ? rows[0] : [];
+          const dataRows = rows.slice(1, MAX_ROWS + 1);
+          const truncated = totalRows - 1 > MAX_ROWS;
+
+          // Get column widths from sheet
+          const colWidths = (sheet["!cols"] || []).map((c: any) => c?.wpx || c?.wch ? (c.wch || 10) * 8 : 100);
+
+          return { name, headers, rows: dataRows, totalRows: totalRows - 1, truncated, colWidths };
+        });
+
+        return json({ sheets, activeSheet: 0 });
+      } catch (e: any) {
+        if (e.message?.includes("password")) {
+          return json({ error: "Password-protected file" }, 400);
+        }
+        return json({ error: `Failed to parse spreadsheet: ${e.message}` }, 500);
+      }
     }
 
     // API: reveal file in Finder

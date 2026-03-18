@@ -54,6 +54,9 @@ async function renderGalleryItem() {
     initZoom();
   } else if (file.ext === '.pdf') {
     previewEl.innerHTML = `<iframe src="/api/files/${encodeURIComponent(file.path)}/preview" style="width:100%;height:100%;border:none;border-radius:4px"></iframe>`;
+  } else if (SPREADSHEET_EXTS.includes(file.ext)) {
+    previewEl.innerHTML = `<div class="spreadsheet-preview" id="spreadsheet-container"></div>`;
+    renderSpreadsheet(file.path, document.getElementById('spreadsheet-container'));
   } else if (TEXT_EXTS.includes(file.ext)) {
     previewEl.innerHTML = `<div class="text-preview"><pre>Loading...</pre></div>`;
     fetch(`/api/files/${encodeURIComponent(file.path)}/preview`)
