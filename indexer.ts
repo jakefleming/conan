@@ -21,6 +21,7 @@ const TEXT_EXTENSIONS = new Set([
   ".rb", ".sh", ".sql", ".rtf",
 ]);
 const SPREADSHEET_EXTENSIONS = new Set([".xlsx", ".xls", ".ods", ".numbers"]);
+const DOCX_EXTENSIONS = new Set([".docx"]);
 const INDEXABLE_EXTENSIONS = new Set([
   ...TEXT_EXTENSIONS,
   ...SPREADSHEET_EXTENSIONS,
@@ -301,6 +302,7 @@ export class ConanIndexer {
     let fileType = "other";
     if (TEXT_EXTENSIONS.has(ext)) fileType = "text";
     else if (SPREADSHEET_EXTENSIONS.has(ext)) fileType = "spreadsheet";
+    else if (DOCX_EXTENSIONS.has(ext)) fileType = "docx";
     else if (ext === ".pdf") fileType = "pdf";
     else if ([".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif", ".svg"].includes(ext)) fileType = "image";
 
@@ -356,8 +358,34 @@ export class ConanIndexer {
       }
     }
 
-    // Queue for Claude extraction (text, pdf, and spreadsheet files)
-    if ((fileType === "text" || fileType === "pdf" || fileType === "spreadsheet") && !this.extractionQueue.includes(relPath)) {
+    // Extract docx content as full_text chunk
+    if (fileType === "docx") {
+      try {
+        const JSZip = (await import("jszip")).default;
+        const buffer = await readFile(absPath);
+        const zip = await JSZip.loadAsync(buffer);
+        const docXml = await zip.file("word/document.xml")?.async("string");
+        if (docXml) {
+          // Extract all text nodes
+          const texts: string[] = [];
+          for (const m of docXml.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)) {
+            texts.push(m[1]);
+          }
+          const content = texts.join(" ").slice(0, MAX_TEXT_SIZE);
+          if (content.trim()) {
+            this.db.run(
+              "INSERT INTO chunks (file_id, chunk_type, content, created_at) VALUES (?,?,?,?)",
+              [fileId, "full_text", content, new Date().toISOString()]
+            );
+          }
+        }
+      } catch (e: any) {
+        console.error(`Failed to parse docx ${relPath}:`, e.message);
+      }
+    }
+
+    // Queue for Claude extraction (text, pdf, spreadsheet, and docx files)
+    if ((fileType === "text" || fileType === "pdf" || fileType === "spreadsheet" || fileType === "docx") && !this.extractionQueue.includes(relPath)) {
       this.extractionQueue.push(relPath);
     }
 

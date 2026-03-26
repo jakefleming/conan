@@ -57,6 +57,9 @@ async function renderGalleryItem() {
   } else if (SPREADSHEET_EXTS.includes(file.ext)) {
     previewEl.innerHTML = `<div class="spreadsheet-preview" id="spreadsheet-container"></div>`;
     renderSpreadsheet(file.path, document.getElementById('spreadsheet-container'));
+  } else if (DOCUMENT_EXTS.includes(file.ext)) {
+    previewEl.innerHTML = `<div class="docx-preview" id="docx-container"></div>`;
+    renderDocx(file.path, document.getElementById('docx-container'));
   } else if (TEXT_EXTS.includes(file.ext)) {
     previewEl.innerHTML = `<div class="text-preview"><pre>Loading...</pre></div>`;
     fetch(`/api/files/${encodeURIComponent(file.path)}/preview`)

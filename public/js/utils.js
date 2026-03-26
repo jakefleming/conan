@@ -12,6 +12,7 @@ function cssVar(name) {
 const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif', '.svg'];
 const TEXT_EXTS = ['.txt', '.md', '.json', '.log', '.yml', '.yaml', '.toml', '.xml', '.html', '.css', '.js', '.ts', '.py', '.sh', '.bash', '.zsh', '.env', '.ini', '.cfg', '.conf'];
 const SPREADSHEET_EXTS = ['.xlsx', '.xls', '.csv', '.tsv', '.ods', '.numbers'];
+const DOCUMENT_EXTS = ['.docx', '.doc'];
 const FILE_ICONS = {
   '.pdf': '📄', '.txt': '📝', '.md': '📝',
   '.doc': '📃', '.docx': '📃',

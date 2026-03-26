@@ -731,6 +731,41 @@
     z-index: 3; /* above both sticky row nums and sticky headers */
   }
 
+  /* Document (docx) viewer */
+  .docx-preview {
+    width: 100%; height: 100%;
+    overflow: auto; box-sizing: border-box;
+  }
+  .docx-content {
+    max-width: 720px; margin: 0 auto;
+    padding: 32px 40px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 14px; line-height: 1.7;
+    color: var(--text);
+  }
+  .docx-heading { margin: 1.2em 0 0.4em; font-weight: 700; color: var(--text); }
+  .docx-content h1 { font-size: 24px; }
+  .docx-content h2 { font-size: 20px; }
+  .docx-content h3 { font-size: 17px; }
+  .docx-content h4 { font-size: 15px; }
+  .docx-paragraph { margin: 0 0 0.5em; }
+  .docx-spacer { height: 0.5em; }
+  .docx-list { margin: 0.3em 0 0.5em 1.5em; padding: 0; }
+  .docx-list li { margin: 0.15em 0; }
+  .docx-table-wrap { overflow-x: auto; margin: 0.8em 0; }
+  .docx-table {
+    border-collapse: collapse; width: 100%;
+    font-size: 13px;
+  }
+  .docx-table td {
+    border: 1px solid var(--border);
+    padding: 6px 10px;
+  }
+  .docx-table tr:first-child td {
+    font-weight: 600;
+    background: var(--bg-secondary);
+  }
+
   .gallery-nav {
     position: absolute;
     top: 50%;
@@ -2451,6 +2486,7 @@
 <script src="/js/grid.js"></script>
 <script src="/js/gallery.js"></script>
 <script src="/js/spreadsheet.js"></script>
+<script src="/js/docx.js"></script>
 <script src="/js/zoom.js"></script>
 <script src="/js/annotations.js"></script>
 <script src="/js/voice.js"></script>

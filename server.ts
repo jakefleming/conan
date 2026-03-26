@@ -101,6 +101,160 @@ function parseImageDimensions(buffer: Buffer, ext: string): { width: number; hei
   }
 }
 
+// ── Docx parser (uses JSZip to read the XML inside .docx) ──
+
+const DOCX_EXTENSIONS = new Set([".docx"]);
+
+interface DocxRun { text: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean }
+interface DocxElement {
+  type: "heading" | "paragraph" | "list-item" | "table";
+  text?: string;
+  runs?: DocxRun[];
+  level?: number;
+  align?: string;
+  indent?: number;
+  numType?: "ordered" | "unordered";
+  listId?: number;
+  rows?: { cells: { text: string; bold?: boolean }[] }[];
+}
+
+async function parseDocx(filePath: string): Promise<DocxElement[]> {
+  const data = await readFile(filePath);
+  const zip = await JSZip.loadAsync(data);
+  const docXml = await zip.file("word/document.xml")?.async("string");
+  if (!docXml) throw new Error("No document.xml found in .docx");
+
+  // Parse numbering definitions to distinguish ordered vs unordered lists
+  let numberingMap = new Map<string, string>(); // numId -> abstractNumId -> numFmt
+  const numberingXml = await zip.file("word/numbering.xml")?.async("string");
+  if (numberingXml) {
+    // Map numId -> abstractNumId
+    const numIdToAbstract = new Map<string, string>();
+    for (const m of numberingXml.matchAll(/<w:num\s+w:numId="([^"]+)"[^>]*>[\s\S]*?<w:abstractNumId\s+w:val="([^"]+)"[\s\S]*?<\/w:num>/g)) {
+      numIdToAbstract.set(m[1], m[2]);
+    }
+    // Map abstractNumId -> numFmt
+    const abstractToFmt = new Map<string, string>();
+    for (const m of numberingXml.matchAll(/<w:abstractNum\s+w:abstractNumId="([^"]+)"[\s\S]*?<\/w:abstractNum>/g)) {
+      const fmtMatch = m[0].match(/<w:numFmt\s+w:val="([^"]+)"/);
+      if (fmtMatch) abstractToFmt.set(m[1], fmtMatch[1]);
+    }
+    for (const [numId, absId] of numIdToAbstract) {
+      numberingMap.set(numId, abstractToFmt.get(absId) || "bullet");
+    }
+  }
+
+  const elements: DocxElement[] = [];
+
+  // Extract table contents
+  function parseTable(tableXml: string): DocxElement {
+    const rows: { cells: { text: string; bold?: boolean }[] }[] = [];
+    const rowMatches = tableXml.matchAll(/<w:tr[\s>][\s\S]*?<\/w:tr>/g);
+    for (const rm of rowMatches) {
+      const cells: { text: string; bold?: boolean }[] = [];
+      const cellMatches = rm[0].matchAll(/<w:tc[\s>][\s\S]*?<\/w:tc>/g);
+      for (const cm of cellMatches) {
+        const texts: string[] = [];
+        for (const t of cm[0].matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)) {
+          texts.push(t[1]);
+        }
+        const bold = /<w:b[\s/>]/.test(cm[0]) && !/<w:b\s+w:val="(false|0)"/.test(cm[0]);
+        cells.push({ text: texts.join(""), bold });
+      }
+      rows.push({ cells });
+    }
+    return { type: "table", rows };
+  }
+
+  // Process body - handle tables and paragraphs at top level
+  const bodyMatch = docXml.match(/<w:body>([\s\S]*)<\/w:body>/);
+  if (!bodyMatch) return elements;
+  const body = bodyMatch[1];
+
+  // Split body into top-level elements (tables and paragraphs)
+  // We need to handle nested tags carefully
+  const topLevelRegex = /<w:tbl[\s>][\s\S]*?<\/w:tbl>|<w:p[\s>][\s\S]*?<\/w:p>/g;
+  let match;
+  while ((match = topLevelRegex.exec(body)) !== null) {
+    const chunk = match[0];
+
+    if (chunk.startsWith("<w:tbl")) {
+      elements.push(parseTable(chunk));
+      continue;
+    }
+
+    // It's a paragraph
+    const pXml = chunk;
+
+    // Check for heading style
+    const styleMatch = pXml.match(/<w:pStyle\s+w:val="([^"]+)"/);
+    const style = styleMatch?.[1] || "";
+
+    // Check for numbering (list item)
+    const numIdMatch = pXml.match(/<w:numId\s+w:val="([^"]+)"/);
+    const ilvlMatch = pXml.match(/<w:ilvl\s+w:val="([^"]+)"/);
+
+    // Check alignment
+    const alignMatch = pXml.match(/<w:jc\s+w:val="([^"]+)"/);
+    const align = alignMatch?.[1] === "center" ? "center" : alignMatch?.[1] === "right" ? "right" : undefined;
+
+    // Check indent
+    const indMatch = pXml.match(/<w:ind\s+[^>]*w:left="(\d+)"/);
+    const indent = indMatch ? Math.round(parseInt(indMatch[1]) / 20) : undefined; // twips to px
+
+    // Extract runs with formatting
+    const runs: DocxRun[] = [];
+    const runRegex = /<w:r[\s>][\s\S]*?<\/w:r>/g;
+    let runMatch;
+    while ((runMatch = runRegex.exec(pXml)) !== null) {
+      const rXml = runMatch[0];
+      const texts: string[] = [];
+      for (const t of rXml.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)) {
+        texts.push(t[1]);
+      }
+      if (texts.length === 0) continue;
+      const bold = /<w:b[\s/>]/.test(rXml) && !/<w:b\s+w:val="(false|0)"/.test(rXml);
+      const italic = /<w:i[\s/>]/.test(rXml) && !/<w:i\s+w:val="(false|0)"/.test(rXml);
+      const underline = /<w:u\s/.test(rXml) && !/<w:u\s+w:val="none"/.test(rXml);
+      const strike = /<w:strike[\s/>]/.test(rXml) && !/<w:strike\s+w:val="(false|0)"/.test(rXml);
+      runs.push({ text: texts.join(""), ...(bold && { bold }), ...(italic && { italic }), ...(underline && { underline }), ...(strike && { strike }) });
+    }
+
+    const fullText = runs.map(r => r.text).join("");
+
+    // Heading
+    if (/^Heading(\d)$/.test(style) || /^heading\s*(\d)$/i.test(style)) {
+      const level = parseInt(style.replace(/\D/g, "")) || 1;
+      elements.push({ type: "heading", level, runs, text: fullText });
+    } else if (style === "Title") {
+      elements.push({ type: "heading", level: 1, runs, text: fullText });
+    } else if (style === "Subtitle") {
+      elements.push({ type: "heading", level: 2, runs, text: fullText });
+    } else if (numIdMatch) {
+      // List item
+      const numId = numIdMatch[1];
+      const numFmt = numberingMap.get(numId) || "bullet";
+      const numType = numFmt === "bullet" ? "unordered" : "ordered";
+      elements.push({ type: "list-item", runs, text: fullText, numType, listId: parseInt(numId) || 0 });
+    } else {
+      elements.push({ type: "paragraph", runs, text: fullText, ...(align && { align }), ...(indent && { indent }) });
+    }
+  }
+
+  return elements;
+}
+
+/** Extract plain text from a .docx file for indexing / Claude analysis */
+async function extractDocxText(filePath: string): Promise<string> {
+  const elements = await parseDocx(filePath);
+  return elements.map(el => {
+    if (el.type === "table") {
+      return (el.rows || []).map(r => r.cells.map(c => c.text).join("\t")).join("\n");
+    }
+    return el.text || "";
+  }).filter(Boolean).join("\n");
+}
+
 // Resize an image buffer so the base64 encoding stays under Claude's 5MB limit.
 // Base64 adds ~33% overhead, so we target ~3.75MB raw.
 const MAX_API_IMAGE_BYTES = 3_750_000;
@@ -260,6 +414,7 @@ async function askClaude(relPath: string, userPrompt?: string, attachments?: any
   const content: any[] = [];
   const isText = TEXT_EXTENSIONS.has(ext);
   const isPdf = ext === ".pdf";
+  const isDocx = DOCX_EXTENSIONS.has(ext);
 
   if (isImage) {
     const imageDataRaw = await readFile(filePath);
@@ -279,6 +434,15 @@ async function askClaude(relPath: string, userPrompt?: string, attachments?: any
         source: { type: "base64", media_type: "application/pdf", data: pdfData.toString("base64") },
       });
     }
+  } else if (isDocx) {
+    // Extract text from Word document
+    try {
+      const docxText = await extractDocxText(filePath);
+      content.push({
+        type: "text",
+        text: `--- Word document content of "${base}" ---\n${docxText.slice(0, MAX_DOC_SIZE)}\n--- End of document ---`,
+      });
+    } catch {}
   } else if (isText) {
     // Include the text file content directly
     const textContent = await readFile(filePath, "utf-8");
@@ -297,6 +461,8 @@ async function askClaude(relPath: string, userPrompt?: string, attachments?: any
     fileTypeInstruction = "Look at this image carefully. Read ALL handwritten text, labels, arrows, and diagram elements.";
   } else if (isPdf) {
     fileTypeInstruction = "Read this PDF document carefully. Analyze its full content including text, tables, and any embedded images.";
+  } else if (isDocx) {
+    fileTypeInstruction = "Read this Word document carefully. Analyze its full content, structure, formatting, and key information.";
   } else if (isText) {
     fileTypeInstruction = "Read this text document carefully. Analyze its full content, structure, and key information.";
   } else {
@@ -1961,6 +2127,22 @@ Return ONLY your description, no labels or prefixes.`,
           return json({ error: "Password-protected file" }, 400);
         }
         return json({ error: `Failed to parse spreadsheet: ${e.message}` }, 500);
+      }
+    }
+
+    // API: parse .docx and return structured content
+    const docxMatch = path.match(/^\/api\/files\/(.+)\/docx$/);
+    if (docxMatch && req.method === "GET") {
+      const relPath = decodeURIComponent(docxMatch[1]);
+      let filePath: string;
+      try { filePath = safePath(relPath); } catch { return json({ error: "Invalid path" }, 400); }
+      if (!existsSync(filePath)) return json({ error: "Not found" }, 404);
+
+      try {
+        const elements = await parseDocx(filePath);
+        return json({ elements });
+      } catch (e: any) {
+        return json({ error: `Failed to parse document: ${e.message}` }, 500);
       }
     }
 
