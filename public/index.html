@@ -669,6 +669,77 @@
     tab-size: 4;
   }
 
+  /* Markdown preview */
+  .markdown-preview {
+    width: 100%; height: 100%; overflow: auto;
+    padding: 32px 40px; box-sizing: border-box;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 15px; line-height: 1.7; color: var(--text);
+  }
+  .markdown-preview h1, .markdown-preview h2, .markdown-preview h3,
+  .markdown-preview h4, .markdown-preview h5, .markdown-preview h6 {
+    margin-top: 1.4em; margin-bottom: 0.6em; font-weight: 600; color: var(--accent);
+  }
+  .markdown-preview h1 { font-size: 1.8em; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+  .markdown-preview h2 { font-size: 1.4em; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+  .markdown-preview h3 { font-size: 1.15em; }
+  .markdown-preview p { margin: 0.8em 0; }
+  .markdown-preview hr { border: none; border-top: 1px solid var(--border); margin: 1.5em 0; }
+  .markdown-preview strong { color: var(--accent); }
+  .markdown-preview code {
+    background: var(--surface-2); padding: 2px 6px; border-radius: 4px;
+    font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.9em;
+  }
+  .markdown-preview pre {
+    background: var(--surface-2); padding: 16px; border-radius: var(--radius);
+    overflow-x: auto; margin: 1em 0;
+  }
+  .markdown-preview pre code { background: none; padding: 0; }
+  .markdown-preview blockquote {
+    border-left: 3px solid var(--border-strong); padding-left: 16px;
+    color: var(--text-muted); margin: 1em 0;
+  }
+  .markdown-preview ul, .markdown-preview ol { padding-left: 1.5em; margin: 0.8em 0; }
+  .markdown-preview li { margin: 0.3em 0; }
+  .markdown-preview a { color: var(--green); text-decoration: none; }
+  .markdown-preview a:hover { text-decoration: underline; }
+  .markdown-preview img.md-inline-image {
+    max-width: 100%; border-radius: var(--radius-lg);
+    margin: 12px 0; cursor: pointer;
+    transition: opacity 0.15s;
+    box-shadow: var(--shadow-md);
+  }
+  .markdown-preview img.md-inline-image:hover { opacity: 0.85; }
+
+  /* Lightbox */
+  .lightbox-overlay {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.88); z-index: 10000;
+    display: flex; align-items: center; justify-content: center;
+    cursor: zoom-out; opacity: 0; transition: opacity 0.2s;
+  }
+  .lightbox-overlay.active { opacity: 1; }
+  .lightbox-overlay img {
+    max-width: 92vw; max-height: 92vh; border-radius: var(--radius-lg);
+    box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+  }
+  .lightbox-bottom {
+    position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 12px;
+    background: var(--surface); border-radius: var(--radius);
+    padding: 6px 8px 6px 14px; max-width: 80vw;
+  }
+  .lightbox-caption {
+    color: var(--text-muted); font-size: 13px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .lightbox-goto {
+    background: var(--surface-3); color: var(--text); border: 1px solid var(--border-strong);
+    padding: 4px 12px; border-radius: var(--radius); font-size: 12px;
+    cursor: pointer; white-space: nowrap; transition: background 0.15s;
+  }
+  .lightbox-goto:hover { background: var(--surface-2); color: var(--accent); }
+
   /* Spreadsheet viewer */
   .spreadsheet-preview {
     width: 100%; height: 100%;
@@ -2484,6 +2555,59 @@
 <script src="/js/state.js"></script>
 <script src="/js/navigation.js"></script>
 <script src="/js/grid.js"></script>
+<script>
+// Extract file path from a preview API URL
+function filePathFromPreviewSrc(src) {
+  const m = src.match(/\/api\/files\/(.+)\/preview/);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+// Alt+click navigates to the file; regular click opens lightbox
+function handleMdImageClick(e, src, alt) {
+  e.preventDefault();
+  if (e.altKey) {
+    const filePath = filePathFromPreviewSrc(src);
+    if (filePath) openFile(filePath);
+  } else {
+    openLightbox(src, alt);
+  }
+}
+
+function closeLightbox() {
+  const lb = document.querySelector('.lightbox-overlay');
+  if (lb) { lb.classList.remove('active'); setTimeout(() => lb.remove(), 200); }
+}
+
+function openLightbox(src, alt) {
+  let overlay = document.querySelector('.lightbox-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.className = 'lightbox-overlay';
+    overlay.innerHTML = `
+      <img />
+      <div class="lightbox-bottom">
+        <div class="lightbox-caption"></div>
+        <button class="lightbox-goto" title="Open this file for annotation">Open file &rarr;</button>
+      </div>`;
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) closeLightbox();
+    });
+    overlay.querySelector('.lightbox-goto').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const filePath = filePathFromPreviewSrc(overlay.querySelector('img').src);
+      closeLightbox();
+      if (filePath) openFile(filePath);
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeLightbox();
+    });
+  }
+  overlay.querySelector('img').src = src;
+  overlay.querySelector('.lightbox-caption').textContent = alt || '';
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => overlay.classList.add('active'));
+}
+</script>
 <script src="/js/gallery.js"></script>
 <script src="/js/spreadsheet.js"></script>
 <script src="/js/docx.js"></script>

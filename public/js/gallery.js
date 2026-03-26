@@ -1,10 +1,28 @@
 // gallery.js — extracted from index.html
 
-function openFile(filePath) {
-  const idx = onlyFiles().findIndex(f => f.path === filePath);
-  if (idx === -1) return;
-  currentIndex = idx;
-  enterGallery();
+async function openFile(filePath) {
+  let idx = onlyFiles().findIndex(f => f.path === filePath);
+  if (idx !== -1) {
+    currentIndex = idx;
+    enterGallery();
+    return;
+  }
+  // File not in current directory — navigate to its directory first
+  const dir = filePath.includes('/') ? filePath.substring(0, filePath.lastIndexOf('/')) : '';
+  if (dir !== currentDir) {
+    // Save scroll position before leaving
+    if (!_navFromPopstate) {
+      const scrollTop = getScrollTop();
+      navReplaceState(currentDir, galleryMode ? onlyFiles()[currentIndex]?.path : null, scrollTop);
+    }
+    currentDir = dir;
+    await loadFiles();
+    idx = onlyFiles().findIndex(f => f.path === filePath);
+    if (idx !== -1) {
+      currentIndex = idx;
+      enterGallery();
+    }
+  }
 }
 
 function enterGallery(onRendered) {
@@ -15,18 +33,31 @@ function enterGallery(onRendered) {
   document.getElementById('orphan-banner').classList.remove('active');
   document.getElementById('btn-toggle-summary').style.display = 'none';
   updateChatFabVisibility();
+  // Push file state for back button
+  const file = onlyFiles()[currentIndex];
+  if (file && !_navFromPopstate) {
+    navPushState(currentDir, file.path, 0);
+  }
   renderGalleryItem().then(() => {
     if (onRendered) onRendered();
   });
 }
 
-function exitGallery() {
+function exitGallery(fromPopstate) {
+  // Save scroll position of current file view before leaving
+  if (!fromPopstate && !_navFromPopstate) {
+    const scrollTop = getScrollTop();
+    navReplaceState(currentDir, onlyFiles()[currentIndex]?.path, scrollTop);
+  }
   galleryMode = false;
   document.getElementById('overview-container').classList.remove('hidden');
   document.getElementById('gallery').classList.remove('active');
   document.getElementById('breadcrumb-bar').style.display = '';
   document.getElementById('btn-toggle-summary').style.display = '';
   updateChatFabVisibility();
+  if (!fromPopstate && !_navFromPopstate) {
+    navPushState(currentDir, null, 0);
+  }
   loadFiles();
 }
 
@@ -60,6 +91,32 @@ async function renderGalleryItem() {
   } else if (DOCUMENT_EXTS.includes(file.ext)) {
     previewEl.innerHTML = `<div class="docx-preview" id="docx-container"></div>`;
     renderDocx(file.path, document.getElementById('docx-container'));
+  } else if (file.ext === '.md') {
+    previewEl.innerHTML = `<div class="markdown-preview">Loading...</div>`;
+    fetch(`/api/files/${encodeURIComponent(file.path)}/preview`)
+      .then(r => r.text())
+      .then(text => {
+        const container = previewEl.querySelector('.markdown-preview');
+        if (!container) return;
+        // Determine the directory of the current file for resolving relative paths
+        const fileDir = file.path.includes('/') ? file.path.substring(0, file.path.lastIndexOf('/')) : '';
+        // Render markdown with image rewriting
+        if (typeof marked !== 'undefined') {
+          const renderer = new marked.Renderer();
+          renderer.image = function({ href, title, text }) {
+            // Rewrite relative paths to go through the preview API
+            if (href && !href.startsWith('http://') && !href.startsWith('https://') && !href.startsWith('data:')) {
+              const fullPath = fileDir ? fileDir + '/' + href : href;
+              href = '/api/files/' + encodeURIComponent(fullPath) + '/preview';
+            }
+            const titleAttr = title ? ` title="${title}"` : '';
+            return `<img src="${href}" alt="${text || ''}"${titleAttr} class="md-inline-image" onclick="handleMdImageClick(event, this.src, this.alt)" />`;
+          };
+          container.innerHTML = marked.parse(text, { renderer });
+        } else {
+          container.innerHTML = `<pre>${text.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</pre>`;
+        }
+      });
   } else if (TEXT_EXTS.includes(file.ext)) {
     previewEl.innerHTML = `<div class="text-preview"><pre>Loading...</pre></div>`;
     fetch(`/api/files/${encodeURIComponent(file.path)}/preview`)
@@ -407,6 +464,7 @@ function goNext() {
   if (currentIndex < fileItems.length - 1) {
     currentIndex++;
     renderGalleryItem();
+    navReplaceState(currentDir, fileItems[currentIndex]?.path, 0);
   }
 }
 
@@ -414,6 +472,7 @@ function goPrev() {
   if (currentIndex > 0) {
     currentIndex--;
     renderGalleryItem();
+    navReplaceState(currentDir, onlyFiles()[currentIndex]?.path, 0);
   }
 }
 

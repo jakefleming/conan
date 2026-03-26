@@ -84,8 +84,13 @@ async function browseForFolder() {
 }
 
 function navigateToDir(dir) {
+  // Save scroll position on current state before navigating
+  if (!_navFromPopstate) {
+    const scrollTop = getScrollTop();
+    navReplaceState(currentDir, galleryMode ? onlyFiles()[currentIndex]?.path : null, scrollTop);
+  }
   currentDir = dir;
-  location.hash = dir ? encodeURIComponent(dir) : '';
+  if (!_navFromPopstate) navPushState(dir, null, 0);
   loadFiles();
   // Reset summary state for new directory
   summaryRawContent = '';
