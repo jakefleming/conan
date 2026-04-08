@@ -55,3 +55,27 @@
     }
   });
 })();
+
+// ── MCP config copy button ──
+// Fetches a paste-ready claude_desktop_config.json snippet for the current
+// target folder and copies it to the clipboard. Designed for pasting into
+// Claude Desktop's MCP config so the desktop app can cowork on the wiki.
+(function () {
+  const btn = document.getElementById('btn-mcp-copy');
+  if (!btn) return;
+
+  btn.addEventListener('click', async () => {
+    try {
+      const res = await fetch('/api/mcp/config');
+      if (!res.ok) {
+        showToast('Failed to fetch MCP config', 'info', 5000);
+        return;
+      }
+      const jsonText = await res.text();
+      await navigator.clipboard.writeText(jsonText);
+      showToast('MCP config copied — paste into Claude Desktop settings', 'success', 5000);
+    } catch (e) {
+      showToast('Copy failed: ' + (e.message || e), 'info', 5000);
+    }
+  });
+})();

@@ -2788,6 +2788,36 @@ Return ONLY your description, no labels or prefixes.`,
       } catch (e: any) { return json({ error: e.message }, 500); }
     }
 
+    // ── MCP config generator for Claude Desktop ──
+    // Returns a paste-ready claude_desktop_config.json snippet that wires
+    // the filesystem MCP server to the current target folder. The server
+    // name is suffixed with the folder basename so multiple Conan projects
+    // can coexist in a single Claude Desktop config.
+    if (path === "/api/mcp/config" && req.method === "GET") {
+      try {
+        const base = basename(resolvedFolder) || "target";
+        const safeName = base.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "target";
+        const serverName = `conan-${safeName}`;
+        const config = {
+          mcpServers: {
+            [serverName]: {
+              command: "npx",
+              args: [
+                "-y",
+                "@modelcontextprotocol/server-filesystem",
+                resolvedFolder,
+              ],
+            },
+          },
+        };
+        return new Response(JSON.stringify(config, null, 2), {
+          headers: { "Content-Type": "application/json" },
+        });
+      } catch (e: any) {
+        return json({ error: e.message }, 500);
+      }
+    }
+
     return new Response("Not Found", { status: 404 });
 }
 
