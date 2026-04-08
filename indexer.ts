@@ -199,16 +199,26 @@ export class ConanIndexer {
     );
   }
 
-  /** Get the stored content hash for a file path (from SQLite) */
+  /** Get the stored content hash for a file path (from SQLite). Returns null on any error (e.g. transient SQLITE_IOERR_VNODE on macOS). */
   getStoredHash(relPath: string): string | null {
-    const row = this.db.query("SELECT content_hash FROM files WHERE path = ?").get(relPath) as { content_hash: string } | null;
-    return row?.content_hash ?? null;
+    try {
+      const row = this.db.query("SELECT content_hash FROM files WHERE path = ?").get(relPath) as { content_hash: string } | null;
+      return row?.content_hash ?? null;
+    } catch (e: any) {
+      console.error(`[indexer] getStoredHash failed for ${relPath}:`, e.message || e);
+      return null;
+    }
   }
 
-  /** Look up a file path by its content hash */
+  /** Look up a file path by its content hash. Returns null on any error. */
   findByHash(hash: string): string | null {
-    const row = this.db.query("SELECT path FROM files WHERE content_hash = ?").get(hash) as { path: string } | null;
-    return row?.path ?? null;
+    try {
+      const row = this.db.query("SELECT path FROM files WHERE content_hash = ?").get(hash) as { path: string } | null;
+      return row?.path ?? null;
+    } catch (e: any) {
+      console.error(`[indexer] findByHash failed:`, e.message || e);
+      return null;
+    }
   }
 
   // ── Full Scan ──
@@ -458,7 +468,11 @@ export class ConanIndexer {
 
         this.pendingPaths.add(filename);
         if (this.debounceTimer) clearTimeout(this.debounceTimer);
-        this.debounceTimer = setTimeout(() => this.processPending(), 1000);
+        this.debounceTimer = setTimeout(() => {
+          this.processPending().catch(e => {
+            console.error("[indexer] processPending unhandled rejection (suppressed):", e?.message || e);
+          });
+        }, 1000);
       });
       // Cleanup stale entries from recentlyDeleted every 5 seconds
       this.cleanupInterval = setInterval(() => {
@@ -490,67 +504,87 @@ export class ConanIndexer {
   }
 
   private async processPending() {
-    const paths = [...this.pendingPaths];
-    this.pendingPaths.clear();
+    // Top-level safety net: a transient SQLite/IO error in here must NOT kill
+    // the server. Background indexing is best-effort; the next watcher event
+    // will re-trigger. Caller is a setTimeout so an unhandled throw here
+    // becomes an unhandled rejection that crashes the process.
+    try {
+      const paths = [...this.pendingPaths];
+      this.pendingPaths.clear();
 
-    const deletedPaths: string[] = [];
-    const createdPaths: string[] = [];
+      const deletedPaths: string[] = [];
+      const createdPaths: string[] = [];
 
-    // First pass: categorize events
-    for (const p of paths) {
-      if (p.endsWith(CONTEXT_FILE)) {
-        const dir = dirname(p) === "." ? "" : dirname(p);
-        await this.syncAnnotationsForDir(join(this.projectRoot, dir), dir);
-      } else {
-        const absPath = join(this.projectRoot, p);
-        const ext = extname(p).toLowerCase();
-        if (!INDEXABLE_EXTENSIONS.has(ext)) continue;
-        if (existsSync(absPath)) {
-          createdPaths.push(p);
-        } else {
-          deletedPaths.push(p);
-        }
-      }
-    }
-
-    // Phase 3: Detect moves — deleted files go into recentlyDeleted with their hash
-    for (const p of deletedPaths) {
-      const storedHash = this.getStoredHash(p);
-      if (storedHash) {
-        this.recentlyDeleted.set(storedHash, { path: p, hash: storedHash, timestamp: Date.now() });
-      }
-      this.db.run("DELETE FROM files WHERE path = ?", [p]);
-    }
-
-    // Phase 3: Check created files against recently deleted
-    for (const p of createdPaths) {
-      const absPath = join(this.projectRoot, p);
-      // Compute hash for the new file
-      let newHash = "";
-      try {
-        const file = Bun.file(absPath);
-        const slice = file.slice(0, 65536);
-        const data = await slice.arrayBuffer();
-        newHash = createHash("sha256").update(Buffer.from(data)).digest("hex").slice(0, 16);
-      } catch {}
-
-      const match = newHash ? this.recentlyDeleted.get(newHash) : null;
-      if (match && Date.now() - match.timestamp < 5000) {
-        // This is a move/rename! Notify the server to migrate context
-        console.log(`Move detected: ${match.path} → ${p}`);
-        this.recentlyDeleted.delete(newHash);
-        if (this.onFileMoved) {
-          try { await this.onFileMoved(match.path, p, newHash); } catch (e) {
-            console.error("Error handling file move:", e);
+      // First pass: categorize events
+      for (const p of paths) {
+        try {
+          if (p.endsWith(CONTEXT_FILE)) {
+            const dir = dirname(p) === "." ? "" : dirname(p);
+            await this.syncAnnotationsForDir(join(this.projectRoot, dir), dir);
+          } else {
+            const absPath = join(this.projectRoot, p);
+            const ext = extname(p).toLowerCase();
+            if (!INDEXABLE_EXTENSIONS.has(ext)) continue;
+            if (existsSync(absPath)) {
+              createdPaths.push(p);
+            } else {
+              deletedPaths.push(p);
+            }
           }
+        } catch (e: any) {
+          console.error(`[indexer] processPending categorize ${p}:`, e.message || e);
         }
       }
-      // Index the new/moved file
-      await this.indexFile(p, absPath);
-    }
 
-    // Run extraction if queued
-    this.processExtractionQueue();
+      // Phase 3: Detect moves — deleted files go into recentlyDeleted with their hash
+      for (const p of deletedPaths) {
+        try {
+          const storedHash = this.getStoredHash(p);
+          if (storedHash) {
+            this.recentlyDeleted.set(storedHash, { path: p, hash: storedHash, timestamp: Date.now() });
+          }
+          this.db.run("DELETE FROM files WHERE path = ?", [p]);
+        } catch (e: any) {
+          console.error(`[indexer] processPending delete ${p}:`, e.message || e);
+        }
+      }
+
+      // Phase 3: Check created files against recently deleted
+      for (const p of createdPaths) {
+        try {
+          const absPath = join(this.projectRoot, p);
+          // Compute hash for the new file
+          let newHash = "";
+          try {
+            const file = Bun.file(absPath);
+            const slice = file.slice(0, 65536);
+            const data = await slice.arrayBuffer();
+            newHash = createHash("sha256").update(Buffer.from(data)).digest("hex").slice(0, 16);
+          } catch {}
+
+          const match = newHash ? this.recentlyDeleted.get(newHash) : null;
+          if (match && Date.now() - match.timestamp < 5000) {
+            // This is a move/rename! Notify the server to migrate context
+            console.log(`Move detected: ${match.path} → ${p}`);
+            this.recentlyDeleted.delete(newHash);
+            if (this.onFileMoved) {
+              try { await this.onFileMoved(match.path, p, newHash); } catch (e) {
+                console.error("Error handling file move:", e);
+              }
+            }
+          }
+          // Index the new/moved file
+          await this.indexFile(p, absPath);
+        } catch (e: any) {
+          console.error(`[indexer] processPending index ${p}:`, e.message || e);
+        }
+      }
+
+      // Run extraction if queued
+      this.processExtractionQueue();
+    } catch (e: any) {
+      console.error("[indexer] processPending crashed (suppressed):", e.message || e);
+    }
   }
 
   // ── Claude Extraction Pipeline ──
