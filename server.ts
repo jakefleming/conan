@@ -809,6 +809,17 @@ indexer.onFileMoved = async (oldRelPath: string, newRelPath: string, hash: strin
   console.log(`Index scan complete: ${result.indexed} indexed, ${result.skipped} unchanged, ${result.removed} removed`);
   indexer.startWatcher();
   if (settings.apiKey) indexer.processExtractionQueue();
+
+  // Auto-scaffold the wiki + target-folder agent briefing so cowork is magic.
+  try {
+    const wiki = await ensureWikiScaffold();
+    if (wiki.created) console.log("Wiki scaffold ready at ./wiki/");
+    const brief = await ensureTargetAgentBriefing();
+    if (brief.created) console.log("Wrote CLAUDE.md briefing for coworking agents");
+    else if (brief.updated) console.log("Refreshed CLAUDE.md briefing block");
+  } catch (e: any) {
+    console.error("Wiki auto-scaffold failed:", e.message || e);
+  }
 })();
 
 type Region = { x: number; y: number; w: number; h: number };
@@ -1516,6 +1527,10 @@ const DEFAULT_WIKI_SCHEMA = `# Wiki conventions
 
 This wiki is maintained by Claude to accumulate synthesized knowledge across all sources in this Conan project. Sources are the raw files (images, sketches, documents) in the parent folder. The wiki is Claude's compiled, cross-referenced understanding of those sources.
 
+## How it stays current
+
+Conan auto-ingests every annotated source about 60 seconds after the last annotation change on it. So as long as you annotate in Conan, the wiki keeps itself up to date in the background — you don't need to trigger anything. A coworking agent (Claude Code, Codex, etc.) is here for the things auto-ingest can't do well: cross-source synthesis, reorganizations, queries, lint passes, manual fixes.
+
 ## Structure
 
 - \`index.md\` — catalog of every wiki page with a one-line summary
@@ -1581,6 +1596,109 @@ async function ensureWikiScaffold(): Promise<{ created: boolean }> {
     if (!existsSync(p)) await mkdir(p, { recursive: true });
   }
   return { created };
+}
+
+// Target-folder CLAUDE.md briefing for coworking agents (Claude Code, etc.).
+// Managed as a fenced block — everything between conan:start and conan:end is
+// auto-rewritten on boot; anything outside is preserved.
+const AGENT_BRIEFING_START = "<!-- conan:start -->";
+const AGENT_BRIEFING_END = "<!-- conan:end -->";
+
+function agentBriefingBlock(): string {
+  return `${AGENT_BRIEFING_START}
+> Auto-maintained by Conan. Everything between \`conan:start\` and \`conan:end\` is rewritten on server startup. Edit freely outside this block.
+
+# Conan session folder
+
+This folder is annotated with [Conan](https://github.com/jakefleming/conan), a local tool for capturing context from design/product sessions. If you're a coding agent (Claude Code, Codex, etc.) reading this, you're here to cowork on the \`wiki/\` directory — **not to modify the raw source files**.
+
+## Layout
+
+- **Raw sources** (\`*.jpg\`, \`*.png\`, \`*.pdf\`, \`*.md\`, ...) — scattered across this folder and any subdirectories. **Immutable. Never modify them.**
+- \`.context.json\` (one per directory) — per-file annotations, status, content hashes. Don't hand-edit; if Conan is running you can hit \`http://localhost:3333\` for the API.
+- \`.thumbs/\`, \`.summary-history/\`, \`.audio_*\`, \`SUMMARY.md\` — Conan-managed data, leave alone.
+- \`wiki/\` — **your working area.** See \`wiki/WIKI.md\` for the schema and conventions.
+
+## Your job
+
+Read \`wiki/WIKI.md\` first — it describes the wiki structure, page types, and ingest/query/lint workflows. Then:
+
+- **Ingest**: when asked to ingest a source, read the source + its entry in the parent directory's \`.context.json\` + the current wiki state, then upsert pages under \`wiki/sources/\`, \`wiki/entities/\`, \`wiki/concepts/\`, update \`wiki/index.md\`, and append a line to \`wiki/log.md\`. Conan also auto-ingests annotated sources ~60 seconds after the last annotation change, so the wiki is usually current when you arrive.
+- **Query**: read \`wiki/index.md\` first to find relevant pages, then drill into them. Fall back to raw sources only when the wiki is gappy on a topic.
+- **Lint**: scan pages for contradictions, orphans, missing cross-references, stale claims. Produce a report and append a lint entry to \`wiki/log.md\`.
+- **Cross-source synthesis**: the wiki is where insights accumulate. When the user asks a question whose answer spans multiple sources, write a new \`wiki/concepts/*.md\` page capturing the synthesis so it persists instead of vanishing into chat history.
+
+## Rules
+
+- Never modify files outside \`wiki/\`.
+- \`wiki/log.md\` is append-only.
+- \`wiki/index.md\` is upsert-only — preserve existing entries.
+- Cross-reference pages with relative markdown links: \`[Name](../entities/name.md)\`.
+- Cite sources at the point of a claim: \`[IMG_1234.jpeg](../sources/img-1234.md)\`.
+- Filenames in kebab-case, always end in \`.md\`.
+
+## The division of labor
+
+Conan handles per-file context capture: annotations, auto-annotations, region labels, summaries. It auto-ingests each file into the wiki shortly after you annotate it. You're here for the things Conan's auto-ingest can't do well: cross-source synthesis, cleanups, queries, re-organizations, manual overrides, lint passes, and answering the user's "what do we know about X?" questions against the accumulated wiki.
+${AGENT_BRIEFING_END}`;
+}
+
+async function ensureTargetAgentBriefing(): Promise<{ created: boolean; updated: boolean }> {
+  const briefingPath = join(resolvedFolder, "CLAUDE.md");
+  const block = agentBriefingBlock();
+  if (!existsSync(briefingPath)) {
+    await writeFile(briefingPath, block + "\n", "utf-8");
+    return { created: true, updated: false };
+  }
+  const existing = await readFile(briefingPath, "utf-8");
+  const startIdx = existing.indexOf(AGENT_BRIEFING_START);
+  const endIdx = existing.indexOf(AGENT_BRIEFING_END);
+  if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
+    // Replace existing block in place
+    const before = existing.slice(0, startIdx);
+    const after = existing.slice(endIdx + AGENT_BRIEFING_END.length);
+    const next = before + block + after;
+    if (next === existing) return { created: false, updated: false };
+    await writeFile(briefingPath, next, "utf-8");
+    return { created: false, updated: true };
+  }
+  // No fence found — append the block at the end, preserving user content
+  const sep = existing.endsWith("\n") ? "\n" : "\n\n";
+  await writeFile(briefingPath, existing + sep + block + "\n", "utf-8");
+  return { created: false, updated: true };
+}
+
+// Debounced auto-ingest: when a file's annotations change, schedule an
+// ingest ~60s later. If more changes arrive for the same file within the
+// window, the timer resets. Silently skips if no API key is configured.
+const WIKI_INGEST_DEBOUNCE_MS = 60_000;
+const pendingIngestTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function scheduleWikiIngest(relPath: string): void {
+  const existing = pendingIngestTimers.get(relPath);
+  if (existing) clearTimeout(existing);
+  const timer = setTimeout(async () => {
+    pendingIngestTimers.delete(relPath);
+    try {
+      const settings = await readSettings();
+      if (!settings.apiKey) {
+        console.log(`[wiki] skip auto-ingest ${relPath}: no API key`);
+        return;
+      }
+      // Make sure the source still exists (user may have deleted/moved it).
+      const absPath = join(resolvedFolder, relPath);
+      if (!existsSync(absPath)) {
+        console.log(`[wiki] skip auto-ingest ${relPath}: file no longer exists`);
+        return;
+      }
+      console.log(`[wiki] auto-ingesting ${relPath}...`);
+      const result = await ingestSourceToWiki(relPath);
+      console.log(`[wiki] ingested ${relPath}: updated ${result.pages.length} page(s)`);
+    } catch (e: any) {
+      console.error(`[wiki] auto-ingest failed for ${relPath}:`, e.message || e);
+    }
+  }, WIKI_INGEST_DEBOUNCE_MS);
+  pendingIngestTimers.set(relPath, timer);
 }
 
 async function readWikiPage(relPath: string): Promise<string | null> {
@@ -1945,7 +2063,19 @@ async function handleRequest(req: Request): Promise<Response> {
         console.log(`Index scan for new folder: ${result.indexed} indexed, ${result.skipped} unchanged, ${result.removed} removed`);
         indexer.startWatcher();
         if (s.apiKey) indexer.processExtractionQueue();
+        try {
+          const wiki = await ensureWikiScaffold();
+          if (wiki.created) console.log("Wiki scaffold ready at ./wiki/");
+          const brief = await ensureTargetAgentBriefing();
+          if (brief.created) console.log("Wrote CLAUDE.md briefing for coworking agents");
+          else if (brief.updated) console.log("Refreshed CLAUDE.md briefing block");
+        } catch (e: any) {
+          console.error("Wiki auto-scaffold failed:", e.message || e);
+        }
       })();
+      // Drop any pending debounced ingests from the previous folder.
+      for (const t of pendingIngestTimers.values()) clearTimeout(t);
+      pendingIngestTimers.clear();
       // Add to recents
       const settings = await readSettings();
       const recents = (settings.recentFolders || []).filter((f: string) => f !== newFolder);
@@ -2186,6 +2316,7 @@ async function handleRequest(req: Request): Promise<Response> {
         });
         context[base].status = "annotated";
         await writeContext(context, dir);
+        scheduleWikiIngest(relPath);
         return json({ ok: true, text: analysis });
       } catch (e: any) {
         return json({ error: e.message }, 500);
@@ -2299,6 +2430,7 @@ Return ONLY your description, no labels or prefixes.`,
         });
         context[base].status = "annotated";
         await writeContext(context, dir);
+        scheduleWikiIngest(relPath);
 
         return json({ ok: true, text });
       } catch (e: any) {
@@ -2329,6 +2461,7 @@ Return ONLY your description, no labels or prefixes.`,
         }
         context[base].status = "annotated";
         await writeContext(context, dir);
+        scheduleWikiIngest(relPath);
         return json({ ok: true, count: annotations.length });
       } catch (e: any) {
         return json({ error: e.message }, 500);
@@ -2613,6 +2746,7 @@ Return ONLY your description, no labels or prefixes.`,
         context[base].comments.push(comment);
         context[base].status = "annotated";
       });
+      scheduleWikiIngest(relPath);
       return json(ctx[base]);
     }
 
@@ -2648,6 +2782,7 @@ Return ONLY your description, no labels or prefixes.`,
         if (context[base].comments.length === 0) context[base].status = "pending";
       });
       if (error) return json({ error }, error === "Not found" ? 404 : 400);
+      scheduleWikiIngest(relPath);
       return json(ctx[base]);
     }
 
@@ -2666,6 +2801,7 @@ Return ONLY your description, no labels or prefixes.`,
         context[base].comments[index].region = body.region;
       });
       if (error) return json({ error }, error === "Not found" ? 404 : 400);
+      scheduleWikiIngest(relPath);
       return json({ ok: true });
     }
 
@@ -2684,6 +2820,7 @@ Return ONLY your description, no labels or prefixes.`,
         context[base].comments[index].text = body.text;
       });
       if (error) return json({ error }, error === "Not found" ? 404 : 400);
+      scheduleWikiIngest(relPath);
       return json({ ok: true });
     }
 
@@ -2723,6 +2860,7 @@ Return ONLY your description, no labels or prefixes.`,
         if (fixedText) {
           context[base].comments[index].text = fixedText;
           await writeContext(context, dir);
+          scheduleWikiIngest(relPath);
           return json({ ok: true, text: fixedText });
         }
         return json({ error: "No response from Claude" }, 500);

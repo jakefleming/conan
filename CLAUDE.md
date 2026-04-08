@@ -90,19 +90,27 @@ Each subdirectory is self-contained with its own:
   - Produces: `crops/` (deterministic filenames `{basename}_c{NNNN}.png`), `originals/` (source images), `annotations.jsonl` (one JSON per line: `image`, `source_image`, `text`, `author`, `region_pct`, `region_px`), `coco.json` (COCO detection format)
 
 ### Wiki (experimental — LLM Wiki pattern)
-Claude-maintained markdown knowledge base that sits alongside the raw source files. Lives in `wiki/` inside the target folder. Hidden from the file grid and tree (it's in server's `HIDDEN_DIRS`) but still picked up by the SQLite indexer so chat/FTS can find pages. See `wiki/WIKI.md` (auto-created on first scaffold) for the conventions Claude follows.
+Claude-maintained markdown knowledge base that sits alongside the raw source files. Lives in `wiki/` inside the target folder. Hidden from the file grid and tree (it's in server's `HIDDEN_DIRS`) but still picked up by the SQLite indexer. See `wiki/WIKI.md` (auto-created on startup) for the conventions Claude follows.
 
-- `POST /api/wiki/scaffold` — Create `wiki/` + seed `WIKI.md`, `index.md`, `log.md`, and `sources/`, `entities/`, `concepts/` subdirs. Idempotent.
+**Auto-bootstrap on startup (and on `/api/folder/switch`)**:
+1. `wiki/` is scaffolded with `WIKI.md`, `index.md`, `log.md`, and `sources/`, `entities/`, `concepts/` subdirs (idempotent).
+2. A `CLAUDE.md` is written to the **target folder root** with a `<!-- conan:start --> ... <!-- conan:end -->` fenced section briefing any coworking agent (Claude Code, Codex, etc.) on the wiki conventions and the division of labor. The fenced section is rewritten on every boot; anything outside the fence is preserved. If `CLAUDE.md` doesn't exist, it's created with just the fenced section.
+
+**Auto-ingest**: every endpoint that mutates a file's annotations (`POST /comments`, `DELETE /comments/:i`, `PUT /comments/:i/text`, `PUT /comments/:i/region`, `POST /comments/:i/fix`, `POST /ask-claude`, `POST /describe-region`, `POST /auto-annotate`) calls `scheduleWikiIngest(relPath)` after success. This sets a 60-second per-file debounced timer; if more changes arrive for the same file within the window, the timer resets. When it fires, the server reads the latest annotation state and runs `ingestSourceToWiki(relPath)` in the background. Silently skipped if no API key is configured. Failures are logged and dropped; nothing is retried.
+
+**Endpoints** (mostly used by the auto-ingest path internally; manual use is supported):
+- `POST /api/wiki/scaffold` — Re-run the scaffold + briefing. Idempotent.
 - `GET /api/wiki/pages` — List all wiki pages with size + mtime
 - `GET /api/wiki/page?path=entities/foo.md` — Read a page
 - `PUT /api/wiki/page?path=entities/foo.md` — Write a page. Body: `{ content: "..." }`
-- `POST /api/wiki/ingest` — Body: `{ sourcePath: "IMG_5210.jpeg" }`. Reads the source (image/text/pdf) + its annotations + existing wiki state, asks Claude to propose upserts to `sources/*.md`, `entities/*.md`, and `concepts/*.md` pages plus `index.md` entries. Writes what Claude returns and appends to `log.md`.
-- `POST /api/wiki/lint` — Audits the wiki for contradictions, orphans, missing pages, and gaps. Returns a markdown report. Appends to `log.md`.
+- `POST /api/wiki/ingest` — Body: `{ sourcePath: "IMG_5210.jpeg" }`. Same call the auto-ingest debounce makes — read source + annotations + wiki state, ask Claude for upserts, write them.
+- `POST /api/wiki/lint` — Audit the wiki for contradictions, orphans, missing pages, and gaps. Returns a markdown report. Appends to `log.md`.
 
 Layers (per the LLM Wiki pattern):
 1. **Raw sources** — the images/sketches/docs in the target folder (immutable; Conan never modifies them)
 2. **Wiki** — `wiki/` directory, owned by Claude: `sources/`, `entities/`, `concepts/` pages + `index.md` catalog + `log.md` chronicle
 3. **Schema** — `wiki/WIKI.md`, auto-seeded on first scaffold, describes conventions
+4. **Briefing** — target folder's `CLAUDE.md` fenced section, auto-rewritten on boot, briefs coworking agents on the wiki conventions and the Conan ↔ wiki division of labor
 
 Ingest is **full-replace**: Claude receives existing page bodies in the prompt and returns the new full content for any page it wants to create or update. The server writes what Claude returns; it does not merge. `index.md` is maintained server-side via the `index_updates` array Claude returns. `log.md` is append-only, maintained server-side.
 
