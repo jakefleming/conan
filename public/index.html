@@ -1283,6 +1283,12 @@
     margin-bottom: 8px;
   }
 
+  /* ── Overview container (the grid wrapper — hidden when in gallery mode) ── */
+  .overview-container {
+    height: calc(100vh - 56px - 39px);
+    overflow-y: auto;
+  }
+  .overview-container.hidden { display: none; }
 
   /* ── File attachment controls (sidebar comment input) ── */
   .chat-attach-btn {
