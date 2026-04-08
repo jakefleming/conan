@@ -1,6 +1,6 @@
 # Conan - Context Annotator
 
-A local-first tool for capturing and synthesizing context from in-person product and design sessions. Point it at a folder of photos, sketches, or documents, then walk through each one adding voice or text annotations. When you're done, generate an AI-powered summary that links back to every source comment and image.
+A local-first tool for capturing context from in-person product and design sessions. Point it at a folder of photos, sketches, or documents, then walk through each one adding voice or text annotations. Conan auto-ingests each annotated source into a Claude-maintained wiki (`wiki/`) that accumulates cross-referenced knowledge as you work.
 
 ## Quick Start
 
@@ -35,17 +35,7 @@ Your session folder should contain the images, PDFs, or documents you want to an
 - **Breadcrumb bar** — clickable path segments for navigating up through the directory hierarchy
 - **Backspace** navigates to the parent directory from grid view
 - **URL hash routing** — directory state persists across browser back/forward
-- **Per-directory data** — each subdirectory has its own `.context.json`, `SUMMARY.md`, thumbnails, and audio
-
-### Summary Generation
-- **Multimodal summaries** — includes thumbnails from `.thumbs/` for visual context alongside annotations
-- **Per-directory summaries** scoped to the files in the current folder
-- **Aggregate summaries** — generate a root-level summary that spans all subdirectories recursively
-- **Clickable citations** — every summary bullet links back to the specific comment it references; clicking navigates to that comment with a highlight flash
-- **Image references** — file names in the summary are clickable and open that image in gallery view
-- **Version history** — each generation creates a new version (`v1`, `v2`, ...) stored in `.summary-history/`; flip through older versions with prev/next arrows
-- **Edit mode** — manually edit the rendered summary markdown in-place
-- **Copy to clipboard** — one-click copy of the raw markdown
+- **Per-directory data** — each subdirectory has its own `.context.json`, thumbnails, and audio
 
 ### File Resilience (Move/Rename Protection)
 - **Content fingerprinting** — SHA-256 of the first 64KB of each annotated file, stored in `.context.json`
@@ -72,7 +62,7 @@ Your session folder should contain the images, PDFs, or documents you want to an
 - **Bun server** (`server.ts`) — serves the app, handles file I/O, proxies Anthropic API calls
 - **SQLite indexer** (`indexer.ts`) — FTS5 search index via `bun:sqlite`, file watcher, alias tracking
 - **Region cropping** — server-side image cropping with [sharp](https://sharp.pixelplumbing.com/) for accurate Claude analysis
-- **Sidecar data** — all annotations stored in `.context.json` next to your files, summaries in `SUMMARY.md` and `.summary-history/`
+- **Sidecar data** — all annotations stored in `.context.json` next to your files
 - **Auto-refresh polling** — if you edit `.context.json` externally, the UI picks up changes within 2 seconds
 - **API key stored locally** in `.annotator-settings.json` (gitignored)
 
@@ -104,15 +94,13 @@ Each directory is self-contained:
 your-session-folder/
   .context.json            # Annotations for files in this directory
   .conan.db                # SQLite index (FTS5 search, file aliases)
-  .summary-history/        # Versioned summaries (v1.md, v2.md, ...)
   .thumbs/                 # Cached thumbnails
   .audio_*.ogg/.webm       # Voice recording files
-  SUMMARY.md               # Latest generated summary
+  wiki/                    # Claude-maintained wiki (WIKI.md, index.md, log.md, sources/, entities/, concepts/)
+  CLAUDE.md                # Auto-written briefing for coworking agents
   subfolder/
     .context.json          # Annotations for this subfolder's files
-    .summary-history/
     .thumbs/
-    SUMMARY.md
 ```
 
 ## API Endpoints
@@ -146,16 +134,6 @@ your-session-folder/
 | `POST` | `/api/files/:path/ask-claude` | AI analysis of a file |
 | `POST` | `/api/files/:path/describe-region` | AI description of a drawn region |
 | `POST` | `/api/files/:path/auto-annotate` | AI region detection + annotation |
-
-### Summary
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/summary?dir=subdir` | Get current summary |
-| `POST` | `/api/summary?dir=subdir` | Save edited summary |
-| `POST` | `/api/summary/generate?dir=subdir&aggregate=true` | Generate summary (add `aggregate=true` for all subdirs) |
-| `GET` | `/api/summary/versions?dir=subdir` | List all summary versions |
-| `GET` | `/api/summary/versions/:n?dir=subdir` | Get specific version |
 
 ### File Move Handling
 

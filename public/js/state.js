@@ -50,14 +50,6 @@ let lastAudioFilename = null;
 // ── Settings ──
 let hasApiKey = false;
 
-// ── Summary ──
-let summaryRawContent = '';
-let summaryLastModified = null;
-let summaryEditMode = false;
-let summaryVisible = false;
-let summaryCurrentVersion = null;
-let summaryTotalVersions = 0;
-
 // ── File Attachments (sidebar comment input) ──
 // [{type:"project",path:"...",thumbUrl:"..."} or {type:"upload",data:"base64",mediaType:"...",name:"...",thumbUrl:"..."}]
 let sidebarAttachments = [];

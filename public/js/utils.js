@@ -100,7 +100,7 @@ function punctuate(raw) {
   return text;
 }
 
-// ── Marked.js custom renderer for summary references ──
+// HTML attribute escaping for inline onclick handlers in breadcrumbs/grid
 function escapeAttr(str) {
   return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }

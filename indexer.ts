@@ -12,9 +12,8 @@ import { existsSync } from "fs";
 import { createHash } from "crypto";
 import * as XLSX from "xlsx";
 
-const HIDDEN_DIRS = new Set([".thumbs", ".summary-history", ".git", ".DS_Store", ".attachments", "node_modules", "__pycache__", ".venv", "venv", ".next", "dist", "build"]);
+const HIDDEN_DIRS = new Set([".thumbs", ".git", ".DS_Store", ".attachments", "node_modules", "__pycache__", ".venv", "venv", ".next", "dist", "build"]);
 const CONTEXT_FILE = ".context.json";
-const SUMMARY_FILE = "SUMMARY.md";
 const TEXT_EXTENSIONS = new Set([
   ".md", ".txt", ".json", ".csv", ".tsv", ".xml", ".yaml", ".yml",
   ".toml", ".ini", ".log", ".html", ".css", ".js", ".ts", ".py",
@@ -263,7 +262,7 @@ export class ConanIndexer {
       const entries = await readdir(absDir, { withFileTypes: true });
       for (const entry of entries) {
         if (entry.name.startsWith(".") || HIDDEN_DIRS.has(entry.name)) continue;
-        if (entry.name === CONTEXT_FILE || entry.name === SUMMARY_FILE) continue;
+        if (entry.name === CONTEXT_FILE) continue;
         const childRel = relPath ? `${relPath}/${entry.name}` : entry.name;
         const childAbs = join(absDir, entry.name);
         if (entry.isDirectory()) {

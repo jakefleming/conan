@@ -42,8 +42,6 @@ Each directory has its own `.context.json` containing annotations for files in t
 
 Each subdirectory is self-contained with its own:
 - `.context.json` — annotations for files in that directory
-- `SUMMARY.md` — generated or manually written summary
-- `.summary-history/` — versioned summary snapshots
 - `.thumbs/` — cached thumbnails
 
 ## API endpoints (all relative to localhost:3333)
@@ -67,13 +65,6 @@ Each subdirectory is self-contained with its own:
 ### Claude analysis
 - `POST /api/files/:path/ask-claude` — Claude analyzes the image + existing comments, adds a claude comment
 - `POST /api/files/:path/auto-annotate` — Claude identifies regions in the image and creates region-annotated comments
-
-### Summary
-- `GET /api/summary?dir=subdir` — Get summary for a directory
-- `POST /api/summary?dir=subdir` — Manually save summary text. Body: `{ content: "..." }`
-- `POST /api/summary/generate?dir=subdir&aggregate=true` — Generate summary with Claude. Add `&aggregate=true` to include all subdirectories recursively.
-- `GET /api/summary/versions?dir=subdir` — List summary versions
-- `GET /api/summary/versions/:n?dir=subdir` — Get specific version
 
 ### File move handling
 - `GET /api/orphans?dir=subdir` — List annotations in `.context.json` that don't match any file on disk
@@ -100,7 +91,7 @@ Claude-maintained markdown knowledge base that sits alongside the raw source fil
 
 **Dedup**: each successful ingest writes `lastIngestedAt` to that file's entry in `.context.json`. Before the timer's Claude call, the dedup check compares `lastIngestedAt` against the latest comment timestamp on the file — if no comment is newer, the call is skipped. Manual `POST /api/wiki/ingest` always runs (no dedup), so curl-driven re-ingest still works.
 
-**Models**: ingest and lint use `claude-haiku-4-5-20251001` (the cheap model — wiki tasks are extraction + structured upsert, not deep reasoning). Per-file features (ask-claude, auto-annotate, describe-region, comment fix, summary generation) use `claude-sonnet-4-6`.
+**Models**: ingest and lint use `claude-haiku-4-5-20251001` (the cheap model — wiki tasks are extraction + structured upsert, not deep reasoning). Per-file features (ask-claude, auto-annotate, describe-region, comment fix) use `claude-sonnet-4-6`.
 
 **Endpoints** (mostly used by the auto-ingest path internally; manual use is supported):
 - `POST /api/wiki/scaffold` — Re-run the scaffold + briefing. Idempotent.
@@ -155,9 +146,6 @@ curl -X PUT http://localhost:3333/api/files/IMG_5210.jpeg/comments/0/text \
 
 # Delete a comment (index 1)
 curl -X DELETE http://localhost:3333/api/files/IMG_5210.jpeg/comments/1
-
-# Generate aggregate summary across all subdirectories
-curl -X POST "http://localhost:3333/api/summary/generate?aggregate=true"
 ```
 
 Or edit `.context.json` directly — the UI will pick up changes on next load.

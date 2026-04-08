@@ -32,9 +32,7 @@ const MIME_TYPES: Record<string, string> = {
 
 const CONTEXT_FILE = ".context.json";
 const SETTINGS_FILE = ".annotator-settings.json";
-const SUMMARY_FILE = "SUMMARY.md";
-const SUMMARY_HISTORY_DIR = ".summary-history";
-const HIDDEN_DIRS = new Set([".thumbs", ".summary-history", ".git", ".DS_Store", ".attachments", "wiki"]);
+const HIDDEN_DIRS = new Set([".thumbs", ".git", ".DS_Store", ".attachments", "wiki"]);
 const PORT = 3333;
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif", ".svg"]);
@@ -329,7 +327,6 @@ async function scanTree(dir: string, relPath: string): Promise<TreeEntry> {
 
   for (const entry of entries) {
     if (entry.name.startsWith(".")) continue;
-    if (entry.name === SUMMARY_FILE) continue;
     if (HIDDEN_DIRS.has(entry.name)) continue;
 
     if (entry.isDirectory()) {
@@ -917,59 +914,6 @@ async function backfillAllHashes(): Promise<number> {
 // Store last reconciliation results for UI notifications
 let lastReconcileResult: { migrated: { from: string; to: string; filename: string }[]; stillOrphaned: number; ts: string } | null = null;
 
-async function readSummary(subdir: string = ""): Promise<{ content: string | null; lastModified: string | null }> {
-  const summaryPath = join(resolvedFolder, subdir, SUMMARY_FILE);
-  if (!existsSync(summaryPath)) return { content: null, lastModified: null };
-  const raw = await readFile(summaryPath, "utf-8");
-  const stats = await stat(summaryPath);
-  return { content: raw, lastModified: stats.mtime.toISOString() };
-}
-
-async function writeSummary(content: string, subdir: string = ""): Promise<void> {
-  const summaryPath = join(resolvedFolder, subdir, SUMMARY_FILE);
-  await writeFile(summaryPath, content, "utf-8");
-}
-
-async function ensureHistoryDir(subdir: string = ""): Promise<string> {
-  const historyDir = join(resolvedFolder, subdir, SUMMARY_HISTORY_DIR);
-  if (!existsSync(historyDir)) {
-    await mkdir(historyDir, { recursive: true });
-  }
-  return historyDir;
-}
-
-async function listVersions(subdir: string = ""): Promise<number[]> {
-  const historyDir = join(resolvedFolder, subdir, SUMMARY_HISTORY_DIR);
-  if (!existsSync(historyDir)) return [];
-  const entries = await readdir(historyDir);
-  const versions = entries
-    .filter(name => /^v\d+\.md$/.test(name))
-    .map(name => parseInt(name.match(/^v(\d+)\.md$/)![1], 10))
-    .sort((a, b) => a - b);
-  return versions;
-}
-
-async function getNextVersion(subdir: string = ""): Promise<number> {
-  const versions = await listVersions(subdir);
-  return versions.length === 0 ? 1 : Math.max(...versions) + 1;
-}
-
-async function saveVersion(content: string, subdir: string = ""): Promise<number> {
-  const historyDir = await ensureHistoryDir(subdir);
-  const version = await getNextVersion(subdir);
-  await writeFile(join(historyDir, `v${version}.md`), content, "utf-8");
-  return version;
-}
-
-async function readVersion(version: number, subdir: string = ""): Promise<{ content: string; version: number } | null> {
-  const filePath = join(resolvedFolder, subdir, SUMMARY_HISTORY_DIR, `v${version}.md`);
-  if (!existsSync(filePath)) return null;
-  const content = await readFile(filePath, "utf-8");
-  return { content, version };
-}
-
-let pendingGenerate = false;
-
 // Recursively collect all contexts from a directory tree
 async function collectAllContexts(dir: string, relPath: string): Promise<{ dir: string; filename: string; fileCtx: FileContext }[]> {
   const results: { dir: string; filename: string; fileCtx: FileContext }[] = [];
@@ -991,285 +935,7 @@ async function collectAllContexts(dir: string, relPath: string): Promise<{ dir: 
 const TEXT_EXTENSIONS = new Set([".md", ".txt", ".json", ".csv", ".tsv", ".xml", ".yaml", ".yml", ".toml", ".ini", ".log", ".html", ".css", ".js", ".ts", ".py", ".rb", ".sh", ".sql", ".rtf"]);
 const MAX_DOC_SIZE = 50000; // 50KB per document to avoid blowing up the prompt
 
-async function collectTextDocuments(dir: string, relPath: string, recursive: boolean = false): Promise<{ path: string; content: string }[]> {
-  const results: { path: string; content: string }[] = [];
-  const absDir = join(resolvedFolder, relPath);
-  try {
-    const entries = await readdir(absDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.name.startsWith(".")) continue;
-      const ext = extname(entry.name).toLowerCase();
-      if (entry.isFile() && TEXT_EXTENSIONS.has(ext)) {
-        // Skip SUMMARY.md — that's our own output
-        if (entry.name === "SUMMARY.md") continue;
-        try {
-          const filePath = join(absDir, entry.name);
-          const content = await readFile(filePath, "utf-8");
-          const displayPath = relPath ? `${relPath}/${entry.name}` : entry.name;
-          results.push({ path: displayPath, content: content.slice(0, MAX_DOC_SIZE) });
-        } catch {}
-      }
-      if (recursive && entry.isDirectory() && !HIDDEN_DIRS.has(entry.name)) {
-        const childRel = relPath ? `${relPath}/${entry.name}` : entry.name;
-        results.push(...await collectTextDocuments(join(absDir, entry.name), childRel, true));
-      }
-    }
-  } catch {}
-  return results;
-}
 
-// Collect thumbnail images as base64 for multimodal API calls.
-// Returns image content blocks ready for the Claude API, plus a list of filenames included.
-async function collectThumbnails(
-  subdir: string,
-  recursive: boolean = false
-): Promise<{ blocks: any[]; fileNames: string[] }> {
-  const blocks: any[] = [];
-  const fileNames: string[] = [];
-
-  async function scanDir(absDir: string, relPath: string) {
-    try {
-      const entries = await readdir(absDir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.name.startsWith(".") || HIDDEN_DIRS.has(entry.name)) continue;
-        if (entry.isDirectory()) {
-          if (recursive) {
-            const childRel = relPath ? `${relPath}/${entry.name}` : entry.name;
-            await scanDir(join(absDir, entry.name), childRel);
-          }
-          continue;
-        }
-        const ext = extname(entry.name).toLowerCase();
-        const displayName = relPath ? `${relPath}/${entry.name}` : entry.name;
-
-        // Handle PDFs
-        if (ext === ".pdf") {
-          try {
-            const filePath = join(absDir, entry.name);
-            const pdfData = Buffer.from(await readFile(filePath));
-            // Claude API max PDF size ~32MB; skip very large ones
-            if (pdfData.length < 30 * 1024 * 1024) {
-              blocks.push({ type: "text", text: `[PDF: ${displayName}]` });
-              blocks.push({
-                type: "document",
-                source: {
-                  type: "base64",
-                  media_type: "application/pdf",
-                  data: pdfData.toString("base64"),
-                },
-              });
-              fileNames.push(displayName);
-            }
-          } catch {}
-          continue;
-        }
-
-        if (!IMAGE_EXTENSIONS.has(ext)) continue;
-
-        const thumbDir = join(absDir, ".thumbs");
-        const thumbPath = join(thumbDir, `${basename(entry.name, ext)}.jpg`);
-
-        let imageData: Buffer | null = null;
-        let mediaType = "image/jpeg";
-
-        if (existsSync(thumbPath)) {
-          imageData = Buffer.from(await readFile(thumbPath));
-        } else {
-          // Generate thumbnail on-the-fly
-          const filePath = join(absDir, entry.name);
-          if (!existsSync(thumbDir)) await mkdir(thumbDir, { recursive: true });
-          const proc = Bun.spawnSync([
-            "sips", "-s", "format", "jpeg", "-s", "formatOptions", "70",
-            "-Z", "400", filePath, "--out", thumbPath,
-          ]);
-          if (proc.exitCode === 0 && existsSync(thumbPath)) {
-            imageData = Buffer.from(await readFile(thumbPath));
-          }
-        }
-
-        if (imageData) {
-          // Add a text label before the image
-          blocks.push({ type: "text", text: `[Image: ${displayName}]` });
-          blocks.push({
-            type: "image",
-            source: {
-              type: "base64",
-              media_type: mediaType,
-              data: imageData.toString("base64"),
-            },
-          });
-          fileNames.push(displayName);
-        }
-      }
-    } catch {}
-  }
-
-  const absDir = join(resolvedFolder, subdir);
-  await scanDir(absDir, subdir);
-  return { blocks, fileNames };
-}
-
-async function generateSummary(subdir: string = "", aggregate: boolean = false): Promise<{ content: string; version: number }> {
-  if (pendingGenerate) throw new Error("Summary generation already in progress.");
-  pendingGenerate = true;
-
-  try {
-    const settings = await readSettings();
-    if (!settings.apiKey) throw new Error("No API key configured");
-
-    let annotationDump = "";
-
-    if (aggregate) {
-      // Collect all files (annotated + unannotated) across all directories
-      const allContexts = await collectAllContexts(join(resolvedFolder, subdir), subdir);
-      // Also scan for unannotated files in all directories
-      async function collectAllFiles(absDir: string, relPath: string): Promise<{ dir: string; filename: string }[]> {
-        const result: { dir: string; filename: string }[] = [];
-        const { files } = await listFiles(relPath);
-        for (const f of files) result.push({ dir: relPath, filename: f });
-        const entries = await readdir(absDir, { withFileTypes: true });
-        for (const entry of entries) {
-          if (!entry.isDirectory() || entry.name.startsWith(".") || HIDDEN_DIRS.has(entry.name)) continue;
-          const childRel = relPath ? `${relPath}/${entry.name}` : entry.name;
-          result.push(...await collectAllFiles(join(absDir, entry.name), childRel));
-        }
-        return result;
-      }
-      const allFiles = await collectAllFiles(join(resolvedFolder, subdir), subdir);
-      const annotatedSet = new Set(allContexts.map(c => `${c.dir}/${c.filename}`));
-
-      for (const { dir, filename, fileCtx } of allContexts) {
-        const displayName = dir ? `${dir}/${filename}` : filename;
-        annotationDump += `\n## ${displayName} (status: ${fileCtx.status})\n`;
-        for (let i = 0; i < fileCtx.comments.length; i++) {
-          const c = fileCtx.comments[i];
-          const regionNote = c.region
-            ? ` (region: ${Math.round(c.region.x)}%-${Math.round(c.region.x + c.region.w)}% x, ${Math.round(c.region.y)}%-${Math.round(c.region.y + c.region.h)}% y)`
-            : "";
-          annotationDump += `- [${c.author.toUpperCase()}, #${i}]${regionNote} ${c.text}\n`;
-        }
-      }
-      // Add unannotated files
-      for (const { dir, filename } of allFiles) {
-        const key = `${dir}/${filename}`;
-        if (!annotatedSet.has(key)) {
-          const displayName = dir ? `${dir}/${filename}` : filename;
-          annotationDump += `\n## ${displayName} (status: pending) — no annotations\n`;
-        }
-      }
-      if (allContexts.length === 0 && allFiles.length === 0) throw new Error("No files to summarize.");
-    } else {
-      const context = await readContext(subdir);
-      const { files } = await listFiles(subdir);
-      // Include ALL files — annotated and unannotated
-      for (const filename of files) {
-        const fileCtx = context[filename];
-        const displayName = subdir ? `${subdir}/${filename}` : filename;
-        if (fileCtx && fileCtx.comments && fileCtx.comments.length > 0) {
-          annotationDump += `\n## ${displayName} (status: ${fileCtx.status})\n`;
-          for (let i = 0; i < fileCtx.comments.length; i++) {
-            const c = fileCtx.comments[i];
-            const regionNote = c.region
-              ? ` (region: ${Math.round(c.region.x)}%-${Math.round(c.region.x + c.region.w)}% x, ${Math.round(c.region.y)}%-${Math.round(c.region.y + c.region.h)}% y)`
-              : "";
-            const attNote = c.attachments?.length ? ` (refs: ${c.attachments.map((a: any) => a.type === 'project' ? a.path : a.originalName).join(', ')})` : "";
-            annotationDump += `- [${c.author.toUpperCase()}, #${i}]${regionNote}${attNote} ${c.text}\n`;
-          }
-        } else {
-          annotationDump += `\n## ${displayName} (status: ${fileCtx?.status || "pending"}) — no annotations\n`;
-        }
-      }
-      if (files.length === 0 && Object.keys(context).length === 0) throw new Error("No files to summarize.");
-    }
-
-    const summaryPrompt = `You are synthesizing annotations from a product/design session into a comprehensive summary document. Below are all files and their annotations. Each annotation is tagged [USER] or [CLAUDE].
-
-RULES:
-1. USER comments are the primary source of truth. They capture the intent, decisions, and context from the person who was in the room.
-2. CLAUDE comments are AI-generated analysis. They may add useful implementation detail, but treat them as supplementary.
-3. If a CLAUDE comment introduces claims, details, or interpretations that go beyond what any USER comment states, flag it in "Items Needing Attention." Do not silently incorporate AI speculation as fact.
-4. If USER comments contradict each other or are ambiguous, call that out as needing clarification.
-5. Structure the output as clean markdown with these sections in this exact order:
-   - # Session Summary (1-2 sentence overview of what this session covers)
-   - ## Key Decisions and Themes (bullet points of the main decisions and recurring themes from USER comments)
-   - ## File-by-File Notes (brief section per file, synthesizing user intent and any useful AI additions)
-   - ## Design Deliverables
-   - ### Screens and Components to Design (numbered list of specific screens, components, modals, or views that need wireframes/mockups, with 1-2 sentence description each)
-   - ### User Flows to Map (multi-step flows that need flow diagrams or journey maps)
-   - ### Data and Content Requirements (data fields, labels, metrics, or content blocks the design needs to account for)
-   - ## Open Questions (anything ambiguous from both a product and design perspective -- things needing clarification before proceeding)
-   - ## Items Needing Attention (anything AI-introduced that needs human review)
-6. Write in plain, direct language. No filler. No generic advice.
-7. Do not use emoji.
-8. If there is nothing for "Items Needing Attention," include the section header with "None identified." beneath it.
-9. If a CLAUDE comment introduced a UI element or design detail that the USER did not mention, flag it as "(AI-suggested, verify with team)" inline.
-10. Be specific. Reference the exact features, modules, metrics, and UI elements mentioned in the annotations. Do not invent screens that were not discussed.
-11. CITATIONS: When referencing a specific comment, use this exact markdown link format:
-   - To cite a comment: ["short verbatim quote"](comment:FILEPATH:INDEX)
-     Example: ["vitality module tracks daily energy"](comment:IMG_5210.jpeg:0)
-   - To reference an image/file: [FILENAME](image:FILEPATH)
-     Example: [IMG_5210.jpeg](image:IMG_5210.jpeg)
-   - FILEPATH is the relative path as shown in the annotations (e.g. "subdir/IMG_5210.jpeg" or just "IMG_5210.jpeg").
-   - Quoted phrases must be 5-15 words extracted VERBATIM from the comment text.
-   - INDEX must match the #N shown next to the comment author tag (e.g. [USER, #0] means index 0).
-   - Use image references when discussing a specific file's content.
-   - Every bullet point in "File-by-File Notes" and each item in "Screens and Components to Design" must include at least one comment citation.
-12. If text documents (markdown, txt files) are provided alongside annotations, use them as context to enrich your summary. Reference relevant document content where it adds clarity (e.g. "per notes.md, the team decided X"). These documents are authoritative context written by the team.
-13. IMAGES: Thumbnail images of the files are included alongside the annotations. Use them to fill in gaps — if an image shows UI elements, layouts, or details not captured in annotations, describe what you see. However, annotations are the PRIMARY source of truth. If an annotation says something specific about a region, trust the annotation over your visual interpretation. For unannotated images, describe what you observe and flag it as "(from image, no annotations)".`;
-
-    // Collect text documents from the directory
-    const textDocs = await collectTextDocuments(resolvedFolder, subdir, aggregate);
-    let docsDump = "";
-    if (textDocs.length > 0) {
-      docsDump = "\n\nDOCUMENTS FOUND IN DIRECTORY:\n";
-      for (const doc of textDocs) {
-        docsDump += `\n### ${doc.path}\n\`\`\`\n${doc.content}\n\`\`\`\n`;
-      }
-    }
-
-    // Collect thumbnails for multimodal context
-    const { blocks: thumbnailBlocks } = await collectThumbnails(subdir, aggregate);
-
-    // Build multimodal message content
-    const textPrompt = `${summaryPrompt}
-${docsDump ? `\nIMPORTANT: The following text documents were found alongside the images. Use them as additional context — they may contain meeting notes, requirements, project context, or domain knowledge that helps you write a better summary. Reference them where relevant.\n${docsDump}` : ""}
-ANNOTATIONS:
-${annotationDump}`;
-
-    const messageContent: any[] = [{ type: "text", text: textPrompt }];
-    if (thumbnailBlocks.length > 0) {
-      messageContent.push({ type: "text", text: "\n\nIMAGE THUMBNAILS (for visual context — annotations take priority):" });
-      messageContent.push(...thumbnailBlocks);
-    }
-
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": settings.apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 4096,
-        messages: [{ role: "user", content: messageContent }],
-      }),
-    });
-
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Claude API error: ${res.status} ${err}`);
-    }
-
-    const data = (await res.json()) as any;
-    const content = data.content[0]?.text ?? "No response";
-    await writeSummary(content, subdir);
-    const version = await saveVersion(content, subdir);
-    return { content, version };
-  } finally {
-    pendingGenerate = false;
-  }
-}
 
 type DirListing = {
   files: string[];
@@ -1285,7 +951,7 @@ async function listFiles(subdir: string = ""): Promise<DirListing> {
 
   for (const entry of entries) {
     if (entry.name.startsWith(".")) continue;
-    if (entry.name === CONTEXT_FILE || entry.name === SUMMARY_FILE) continue;
+    if (entry.name === CONTEXT_FILE) continue;
     if (HIDDEN_DIRS.has(entry.name)) continue;
 
     if (entry.isDirectory()) {
@@ -1306,7 +972,7 @@ async function listAllFiles(subdir: string = ""): Promise<{ path: string; name: 
   if (!existsSync(dirPath)) return results;
   const entries = await readdir(dirPath, { withFileTypes: true });
   for (const entry of entries) {
-    if (entry.name.startsWith(".") || entry.name === CONTEXT_FILE || entry.name === SUMMARY_FILE || HIDDEN_DIRS.has(entry.name)) continue;
+    if (entry.name.startsWith(".") || entry.name === CONTEXT_FILE || HIDDEN_DIRS.has(entry.name)) continue;
     if (entry.isDirectory()) {
       const childRel = subdir ? `${subdir}/${entry.name}` : entry.name;
       results.push(...await listAllFiles(childRel));
@@ -1616,7 +1282,7 @@ This folder is annotated with [Conan](https://github.com/jakefleming/conan), a l
 
 - **Raw sources** (\`*.jpg\`, \`*.png\`, \`*.pdf\`, \`*.md\`, ...) — scattered across this folder and any subdirectories. **Immutable. Never modify them.**
 - \`.context.json\` (one per directory) — per-file annotations, status, content hashes. Don't hand-edit; if Conan is running you can hit \`http://localhost:3333\` for the API.
-- \`.thumbs/\`, \`.summary-history/\`, \`.audio_*\`, \`SUMMARY.md\` — Conan-managed data, leave alone.
+- \`.thumbs/\`, \`.audio_*\` — Conan-managed data, leave alone.
 - \`wiki/\` — **your working area.** See \`wiki/WIKI.md\` for the schema and conventions.
 
 ## Your job
@@ -2900,68 +2566,6 @@ Return ONLY your description, no labels or prefixes.`,
         return json({ error: "No response from Claude" }, 500);
       } catch (e: any) {
         return json({ error: e.message }, 500);
-      }
-    }
-
-    // API: get summary (supports ?dir=)
-    if (path === "/api/summary" && req.method === "GET") {
-      try {
-        if (dirParam) safePath(dirParam);
-        const summary = await readSummary(dirParam);
-        return json(summary);
-      } catch (e: any) {
-        return json({ error: e.message }, 400);
-      }
-    }
-
-    // API: save summary (manual edit, supports ?dir=)
-    if (path === "/api/summary" && req.method === "POST") {
-      try {
-        if (dirParam) safePath(dirParam);
-        const body = (await req.json()) as { content: string };
-        await writeSummary(body.content, dirParam);
-        return json({ ok: true });
-      } catch (e: any) {
-        return json({ error: e.message }, 400);
-      }
-    }
-
-    // API: generate summary (supports ?dir= and ?aggregate=true)
-    if (path === "/api/summary/generate" && req.method === "POST") {
-      try {
-        if (dirParam) safePath(dirParam);
-        const aggregate = url.searchParams.get("aggregate") === "true";
-        const { content, version } = await generateSummary(dirParam, aggregate);
-        const versions = await listVersions(dirParam);
-        return json({ ok: true, content, version, totalVersions: versions.length });
-      } catch (e: any) {
-        return json({ error: e.message }, 500);
-      }
-    }
-
-    // API: list summary versions (supports ?dir=)
-    if (path === "/api/summary/versions" && req.method === "GET") {
-      try {
-        if (dirParam) safePath(dirParam);
-        const versions = await listVersions(dirParam);
-        return json({ versions, total: versions.length });
-      } catch (e: any) {
-        return json({ error: e.message }, 400);
-      }
-    }
-
-    // API: get specific summary version (supports ?dir=)
-    const versionMatch = path.match(/^\/api\/summary\/versions\/(\d+)$/);
-    if (versionMatch && req.method === "GET") {
-      try {
-        if (dirParam) safePath(dirParam);
-        const versionNum = parseInt(versionMatch[1], 10);
-        const result = await readVersion(versionNum, dirParam);
-        if (!result) return json({ error: "Version not found" }, 404);
-        const versions = await listVersions(dirParam);
-        return json({ content: result.content, version: result.version, totalVersions: versions.length });
-      } catch (e: any) {
-        return json({ error: e.message }, 400);
       }
     }
 

@@ -92,16 +92,6 @@ function navigateToDir(dir) {
   currentDir = dir;
   if (!_navFromPopstate) navPushState(dir, null, 0);
   loadFiles();
-  // Reset summary state for new directory
-  summaryRawContent = '';
-  summaryLastModified = null;
-  summaryCurrentVersion = null;
-  summaryTotalVersions = 0;
-  if (summaryVisible) {
-    renderSummary(); // immediately show empty state for the new dir
-    loadSummary();
-    loadVersionList();
-  }
 }
 
 function renderBreadcrumbs() {
