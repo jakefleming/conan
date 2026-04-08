@@ -532,7 +532,7 @@ ${userPrompt ? `Focus your response on answering the user's question/request: "$
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-6",
       max_tokens: 1024,
       messages,
     }),
@@ -647,7 +647,7 @@ Content rules:
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-6",
       max_tokens: 2048,
       messages,
     }),
@@ -827,7 +827,7 @@ type CommentAttachment =
   | { type: "project"; path: string }
   | { type: "local"; path: string; originalName: string };
 type Comment = { author: "user" | "claude"; text: string; ts: string; audio?: string; region?: Region; attachments?: CommentAttachment[] };
-type FileContext = { comments: Comment[]; status: "pending" | "annotated" | "skipped"; hash?: string };
+type FileContext = { comments: Comment[]; status: "pending" | "annotated" | "skipped"; hash?: string; lastIngestedAt?: string };
 type ContextData = Record<string, FileContext>;
 
 // Per-directory write lock to prevent concurrent read-modify-write races on .context.json
@@ -1250,7 +1250,7 @@ ${annotationDump}`;
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-sonnet-4-6",
         max_tokens: 4096,
         messages: [{ role: "user", content: messageContent }],
       }),
@@ -1669,10 +1669,22 @@ async function ensureTargetAgentBriefing(): Promise<{ created: boolean; updated:
 }
 
 // Debounced auto-ingest: when a file's annotations change, schedule an
-// ingest ~60s later. If more changes arrive for the same file within the
-// window, the timer resets. Silently skips if no API key is configured.
-const WIKI_INGEST_DEBOUNCE_MS = 60_000;
+// ingest a few minutes later. If more changes arrive for the same file
+// within the window, the timer resets. Silently skips if no API key is
+// configured. Dedups against `lastIngestedAt` in .context.json so a
+// timer firing on a file that hasn't changed since its last successful
+// ingest is a free no-op (no Claude call).
+const WIKI_INGEST_DEBOUNCE_MS = 180_000; // 3 minutes
 const pendingIngestTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function latestCommentTimestamp(fileCtx: FileContext | undefined): string | null {
+  if (!fileCtx?.comments?.length) return null;
+  let latest: string | null = null;
+  for (const c of fileCtx.comments) {
+    if (c.ts && (!latest || c.ts > latest)) latest = c.ts;
+  }
+  return latest;
+}
 
 function scheduleWikiIngest(relPath: string): void {
   const existing = pendingIngestTimers.get(relPath);
@@ -1690,6 +1702,18 @@ function scheduleWikiIngest(relPath: string): void {
       if (!existsSync(absPath)) {
         console.log(`[wiki] skip auto-ingest ${relPath}: file no longer exists`);
         return;
+      }
+      // Dedup: if the latest annotation is older than (or equal to) the
+      // last successful ingest, nothing has changed — skip the Claude call.
+      const { dir, base } = splitRelPath(relPath);
+      const ctx = await readContext(dir);
+      const fileCtx = ctx[base];
+      if (fileCtx?.lastIngestedAt) {
+        const latestComment = latestCommentTimestamp(fileCtx);
+        if (latestComment && latestComment <= fileCtx.lastIngestedAt) {
+          console.log(`[wiki] skip auto-ingest ${relPath}: no changes since last ingest`);
+          return;
+        }
       }
       console.log(`[wiki] auto-ingesting ${relPath}...`);
       const result = await ingestSourceToWiki(relPath);
@@ -1881,7 +1905,7 @@ Return ONLY a valid JSON object (no prose, no code fences) in this exact shape:
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-haiku-4-5-20251001",
         max_tokens: 4096,
         messages: [{ role: "user", content }],
       }),
@@ -1931,6 +1955,16 @@ Return ONLY a valid JSON object (no prose, no code fences) in this exact shape:
       : `ingest ${sourceRelPath}`;
     await appendWikiLog(`ingest | ${sourceRelPath} | ${logEntry}`);
 
+    // Mark this source as ingested so future debounced fires can dedup
+    // when nothing has changed.
+    try {
+      await updateContext(dir, (context) => {
+        if (context[base]) context[base].lastIngestedAt = new Date().toISOString();
+      });
+    } catch (e: any) {
+      console.error(`[wiki] failed to record lastIngestedAt for ${sourceRelPath}:`, e.message || e);
+    }
+
     return { pages: written, log_entry: logEntry };
   } finally {
     pendingWikiIngest.delete(sourceRelPath);
@@ -1978,7 +2012,7 @@ ${bodies.join("\n\n")}`;
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-haiku-4-5-20251001",
       max_tokens: 2048,
       messages: [{ role: "user", content: prompt }],
     }),
@@ -2372,7 +2406,7 @@ async function handleRequest(req: Request): Promise<Response> {
             "anthropic-version": "2023-06-01",
           },
           body: JSON.stringify({
-            model: "claude-sonnet-4-20250514",
+            model: "claude-sonnet-4-6",
             max_tokens: 512,
             messages: [{
               role: "user",
@@ -2847,7 +2881,7 @@ Return ONLY your description, no labels or prefixes.`,
             "anthropic-version": "2023-06-01",
           },
           body: JSON.stringify({
-            model: "claude-sonnet-4-20250514",
+            model: "claude-sonnet-4-6",
             max_tokens: 2048,
             messages: [{
               role: "user",
