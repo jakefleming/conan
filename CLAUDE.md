@@ -89,6 +89,23 @@ Each subdirectory is self-contained with its own:
 - `POST /api/export` — Export annotated regions as a zip. Body: `{ scope: "file"|"directory"|"root", path: "...", authorFilter?: "all"|"user"|"claude" }`
   - Produces: `crops/` (deterministic filenames `{basename}_c{NNNN}.png`), `originals/` (source images), `annotations.jsonl` (one JSON per line: `image`, `source_image`, `text`, `author`, `region_pct`, `region_px`), `coco.json` (COCO detection format)
 
+### Wiki (experimental — LLM Wiki pattern)
+Claude-maintained markdown knowledge base that sits alongside the raw source files. Lives in `wiki/` inside the target folder. Hidden from the file grid and tree (it's in server's `HIDDEN_DIRS`) but still picked up by the SQLite indexer so chat/FTS can find pages. See `wiki/WIKI.md` (auto-created on first scaffold) for the conventions Claude follows.
+
+- `POST /api/wiki/scaffold` — Create `wiki/` + seed `WIKI.md`, `index.md`, `log.md`, and `sources/`, `entities/`, `concepts/` subdirs. Idempotent.
+- `GET /api/wiki/pages` — List all wiki pages with size + mtime
+- `GET /api/wiki/page?path=entities/foo.md` — Read a page
+- `PUT /api/wiki/page?path=entities/foo.md` — Write a page. Body: `{ content: "..." }`
+- `POST /api/wiki/ingest` — Body: `{ sourcePath: "IMG_5210.jpeg" }`. Reads the source (image/text/pdf) + its annotations + existing wiki state, asks Claude to propose upserts to `sources/*.md`, `entities/*.md`, and `concepts/*.md` pages plus `index.md` entries. Writes what Claude returns and appends to `log.md`.
+- `POST /api/wiki/lint` — Audits the wiki for contradictions, orphans, missing pages, and gaps. Returns a markdown report. Appends to `log.md`.
+
+Layers (per the LLM Wiki pattern):
+1. **Raw sources** — the images/sketches/docs in the target folder (immutable; Conan never modifies them)
+2. **Wiki** — `wiki/` directory, owned by Claude: `sources/`, `entities/`, `concepts/` pages + `index.md` catalog + `log.md` chronicle
+3. **Schema** — `wiki/WIKI.md`, auto-seeded on first scaffold, describes conventions
+
+Ingest is **full-replace**: Claude receives existing page bodies in the prompt and returns the new full content for any page it wants to create or update. The server writes what Claude returns; it does not merge. `index.md` is maintained server-side via the `index_updates` array Claude returns. `log.md` is append-only, maintained server-side.
+
 ### Other
 - `GET /api/config` — Get config (hasApiKey, folder path)
 - `GET/POST /api/settings` — Get or update settings (apiKey)

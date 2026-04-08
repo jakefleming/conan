@@ -34,7 +34,7 @@ const CONTEXT_FILE = ".context.json";
 const SETTINGS_FILE = ".annotator-settings.json";
 const SUMMARY_FILE = "SUMMARY.md";
 const SUMMARY_HISTORY_DIR = ".summary-history";
-const HIDDEN_DIRS = new Set([".thumbs", ".summary-history", ".git", ".DS_Store", ".attachments"]);
+const HIDDEN_DIRS = new Set([".thumbs", ".summary-history", ".git", ".DS_Store", ".attachments", "wiki"]);
 const PORT = 3333;
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif", ".svg"]);
@@ -1502,6 +1502,377 @@ async function reconcileAll(): Promise<{ migrated: { from: string; to: string; f
   return { migrated, stillOrphaned: totalOrphans };
 }
 
+// ── LLM Wiki (experimental) ──
+// Pattern: a persistent, Claude-maintained markdown knowledge base that sits
+// alongside the raw source files. See WIKI.md (auto-created on first ingest)
+// for the conventions Claude follows when ingesting sources.
+
+const WIKI_DIR = "wiki";
+const WIKI_SCHEMA_FILE = "WIKI.md";
+const WIKI_INDEX_FILE = "index.md";
+const WIKI_LOG_FILE = "log.md";
+
+const DEFAULT_WIKI_SCHEMA = `# Wiki conventions
+
+This wiki is maintained by Claude to accumulate synthesized knowledge across all sources in this Conan project. Sources are the raw files (images, sketches, documents) in the parent folder. The wiki is Claude's compiled, cross-referenced understanding of those sources.
+
+## Structure
+
+- \`index.md\` — catalog of every wiki page with a one-line summary
+- \`log.md\` — append-only chronological record of ingests and lints
+- \`sources/\` — one page per ingested source file, summarizing what it contains
+- \`entities/\` — pages for concrete things referenced across sources (people, products, features, UI components, systems)
+- \`concepts/\` — pages for recurring themes, principles, decisions, and ideas
+
+## Conventions
+
+- Every wiki page is plain markdown.
+- Cross-reference other pages with relative links: \`[Name](../entities/name.md)\`.
+- Cite sources at the point of a claim: \`[source.jpeg](../sources/source.md)\`.
+- Flag contradictions inline with blockquotes: \`> contradicts [other page](...)\`.
+- Keep entity pages short and factual; put synthesis in concept pages.
+- Filenames use kebab-case and end in \`.md\`.
+
+## Ingest workflow
+
+On each ingest, Claude reads the source + existing annotations + existing wiki state, then proposes upserts to:
+1. exactly one \`sources/<slug>.md\` page for the source,
+2. zero or more \`entities/*.md\` pages for things mentioned,
+3. zero or more \`concepts/*.md\` pages for themes that surfaced,
+4. a new entry in \`index.md\` for each new/updated page,
+5. a one-line entry in \`log.md\`.
+`;
+
+const DEFAULT_WIKI_INDEX = `# Wiki index
+
+_Auto-maintained. Catalogs every page in the wiki._
+
+## Pages
+`;
+
+const DEFAULT_WIKI_LOG = `# Wiki log
+
+_Append-only chronological record of ingests, queries, and lints._
+
+`;
+
+function wikiAbsPath(relPath: string = ""): string {
+  const abs = normalize(join(resolvedFolder, WIKI_DIR, relPath));
+  const root = normalize(join(resolvedFolder, WIKI_DIR));
+  if (!abs.startsWith(root)) throw new Error("Wiki path traversal blocked");
+  return abs;
+}
+
+async function ensureWikiScaffold(): Promise<{ created: boolean }> {
+  let created = false;
+  const root = wikiAbsPath();
+  if (!existsSync(root)) { await mkdir(root, { recursive: true }); created = true; }
+  const seeds: [string, string][] = [
+    [WIKI_SCHEMA_FILE, DEFAULT_WIKI_SCHEMA],
+    [WIKI_INDEX_FILE, DEFAULT_WIKI_INDEX],
+    [WIKI_LOG_FILE, DEFAULT_WIKI_LOG],
+  ];
+  for (const [file, content] of seeds) {
+    const p = wikiAbsPath(file);
+    if (!existsSync(p)) { await writeFile(p, content, "utf-8"); created = true; }
+  }
+  for (const sub of ["sources", "entities", "concepts"]) {
+    const p = wikiAbsPath(sub);
+    if (!existsSync(p)) await mkdir(p, { recursive: true });
+  }
+  return { created };
+}
+
+async function readWikiPage(relPath: string): Promise<string | null> {
+  const p = wikiAbsPath(relPath);
+  if (!existsSync(p)) return null;
+  return readFile(p, "utf-8");
+}
+
+async function writeWikiPage(relPath: string, content: string): Promise<void> {
+  if (!relPath.endsWith(".md")) throw new Error(`Wiki pages must end in .md: ${relPath}`);
+  const abs = wikiAbsPath(relPath);
+  await mkdir(dirname(abs), { recursive: true });
+  await writeFile(abs, content, "utf-8");
+}
+
+async function listWikiPages(): Promise<{ path: string; size: number; modified: string }[]> {
+  const root = wikiAbsPath();
+  if (!existsSync(root)) return [];
+  const out: { path: string; size: number; modified: string }[] = [];
+  async function walk(absDir: string, rel: string) {
+    const entries = await readdir(absDir, { withFileTypes: true });
+    for (const e of entries) {
+      if (e.name.startsWith(".")) continue;
+      const childAbs = join(absDir, e.name);
+      const childRel = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) { await walk(childAbs, childRel); continue; }
+      if (!e.name.endsWith(".md")) continue;
+      const s = await stat(childAbs);
+      out.push({ path: childRel, size: s.size, modified: s.mtime.toISOString() });
+    }
+  }
+  await walk(root, "");
+  return out.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+async function appendWikiLog(entry: string): Promise<void> {
+  const logAbs = wikiAbsPath(WIKI_LOG_FILE);
+  const existing = existsSync(logAbs) ? await readFile(logAbs, "utf-8") : DEFAULT_WIKI_LOG;
+  const line = `## [${new Date().toISOString()}] ${entry}\n\n`;
+  await writeFile(logAbs, existing + line, "utf-8");
+}
+
+function upsertIndexEntry(indexContent: string, pagePath: string, oneLiner: string): string {
+  const escaped = pagePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const entryRe = new RegExp(`^- \\[${escaped}\\].*$`, "m");
+  const newLine = `- [${pagePath}](${pagePath}) — ${oneLiner}`;
+  if (entryRe.test(indexContent)) {
+    return indexContent.replace(entryRe, newLine);
+  }
+  // Find "## Pages" header and insert after it, keeping subsequent entries sorted.
+  const lines = indexContent.split("\n");
+  let pagesIdx = lines.findIndex(l => l.trim() === "## Pages");
+  if (pagesIdx === -1) { lines.push("", "## Pages", ""); pagesIdx = lines.length - 2; }
+  // Collect existing entry lines after the header until a non-entry blank line or new section
+  let i = pagesIdx + 1;
+  const entries: string[] = [];
+  while (i < lines.length && (lines[i].startsWith("- [") || lines[i].trim() === "")) {
+    if (lines[i].startsWith("- [")) entries.push(lines[i]);
+    i++;
+  }
+  entries.push(newLine);
+  entries.sort();
+  const before = lines.slice(0, pagesIdx + 1);
+  const after = lines.slice(i);
+  return [...before, ...entries, ...after].join("\n");
+}
+
+const pendingWikiIngest = new Set<string>();
+
+async function ingestSourceToWiki(sourceRelPath: string): Promise<{ pages: string[]; log_entry: string }> {
+  if (pendingWikiIngest.has(sourceRelPath)) throw new Error("Already ingesting this source");
+  pendingWikiIngest.add(sourceRelPath);
+  try {
+    const settings = await readSettings();
+    if (!settings.apiKey) throw new Error("No API key configured");
+
+    await ensureWikiScaffold();
+
+    const { dir, base } = splitRelPath(sourceRelPath);
+    const absPath = safePath(sourceRelPath);
+    if (!existsSync(absPath)) throw new Error(`Source not found: ${sourceRelPath}`);
+    const ext = extname(base).toLowerCase();
+    const isImage = IMAGE_EXTENSIONS.has(ext);
+    const isText = TEXT_EXTENSIONS.has(ext);
+
+    const context = await readContext(dir);
+    const fileCtx = context[base];
+    const annotationsDump = fileCtx?.comments?.length
+      ? fileCtx.comments.map((c, i) => {
+          const regionNote = c.region ? ` (region ${Math.round(c.region.x)}%,${Math.round(c.region.y)}% ${Math.round(c.region.w)}x${Math.round(c.region.h)}%)` : "";
+          return `[${c.author.toUpperCase()}, #${i}]${regionNote} ${c.text}`;
+        }).join("\n")
+      : "(no annotations on this source yet)";
+
+    // Read existing wiki state
+    const schema = (await readWikiPage(WIKI_SCHEMA_FILE)) ?? DEFAULT_WIKI_SCHEMA;
+    const indexMd = (await readWikiPage(WIKI_INDEX_FILE)) ?? DEFAULT_WIKI_INDEX;
+    const pageList = await listWikiPages();
+    const MAX_PAGES_BYTES = 40000;
+    let budget = MAX_PAGES_BYTES;
+    const relevantPages: { path: string; content: string }[] = [];
+    for (const pg of pageList) {
+      if (pg.path === WIKI_SCHEMA_FILE || pg.path === WIKI_INDEX_FILE || pg.path === WIKI_LOG_FILE) continue;
+      const body = (await readWikiPage(pg.path)) ?? "";
+      if (body.length > budget) break;
+      relevantPages.push({ path: pg.path, content: body });
+      budget -= body.length;
+    }
+    const pagesDump = relevantPages.length
+      ? relevantPages.map(p => `--- existing page: ${p.path} ---\n${p.content}\n--- end ${p.path} ---`).join("\n\n")
+      : "(no existing sources/entities/concepts pages yet)";
+
+    const content: any[] = [];
+    if (isImage) {
+      const raw = await readFile(absPath);
+      const mediaType = ext === ".png" ? "image/png" : ext === ".gif" ? "image/gif" : ext === ".webp" ? "image/webp" : "image/jpeg";
+      const resized = await resizeForApi(Buffer.from(raw), mediaType);
+      content.push({ type: "image", source: { type: "base64", media_type: mediaType, data: resized.toString("base64") } });
+    } else if (isText) {
+      const text = await readFile(absPath, "utf-8");
+      content.push({ type: "text", text: `--- Source content of "${sourceRelPath}" ---\n${text.slice(0, MAX_DOC_SIZE)}\n--- End of source ---` });
+    } else if (ext === ".pdf") {
+      const pdfData = Buffer.from(await readFile(absPath));
+      if (pdfData.length < 30 * 1024 * 1024) {
+        content.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: pdfData.toString("base64") } });
+      }
+    }
+
+    const promptText = `You are the wiki maintainer for a Conan project. Your job is to incrementally build and maintain a persistent, cross-referenced markdown wiki that synthesizes knowledge from source files.
+
+# Wiki schema
+${schema}
+
+# Current wiki index
+${indexMd}
+
+# Existing pages you can revise
+${pagesDump}
+
+# Source being ingested
+Path: ${sourceRelPath}
+Annotations:
+${annotationsDump}
+
+# Your task
+Propose page upserts to integrate this source into the wiki. Produce:
+- exactly one sources/<slug>.md page for this source (required)
+- zero or more entities/*.md pages for concrete things mentioned (people, features, UI components, modules, systems)
+- zero or more concepts/*.md pages for recurring themes, decisions, or principles
+
+Rules:
+- If a page already exists (see "Existing pages" above), return its FULL new content — you are doing a full replace, not a patch. Preserve valuable existing material and integrate the new information.
+- Use relative markdown links to cross-reference other wiki pages: [Name](../entities/name.md)
+- Cite the source at the point of claims: [${base}](../sources/<slug>.md)
+- Keep pages concise and factual. No fluff, no generic advice.
+- Do NOT return pages for index.md, log.md, or WIKI.md — those are handled separately.
+- Paths must be relative to the wiki/ directory, use forward slashes, and end in .md.
+- Filenames in kebab-case.
+
+Return ONLY a valid JSON object (no prose, no code fences) in this exact shape:
+{
+  "pages": [
+    { "path": "sources/slug.md", "content": "# ..." },
+    { "path": "entities/thing.md", "content": "# ..." }
+  ],
+  "index_updates": [
+    { "path": "sources/slug.md", "summary": "one-line description" },
+    { "path": "entities/thing.md", "summary": "one-line description" }
+  ],
+  "log_entry": "one-line summary of what you changed"
+}`;
+
+    content.push({ type: "text", text: promptText });
+
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": settings.apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 4096,
+        messages: [{ role: "user", content }],
+      }),
+    });
+    if (!res.ok) throw new Error(`Claude API error: ${res.status} ${await res.text()}`);
+    const data = (await res.json()) as any;
+    const replyText = (data.content || []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("") || "";
+
+    // Extract JSON (strip optional code fences)
+    let parsed: any;
+    try {
+      let trimmed = replyText.trim();
+      trimmed = trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+      // If there's leading/trailing prose, try to grab the outermost {...}
+      const firstBrace = trimmed.indexOf("{");
+      const lastBrace = trimmed.lastIndexOf("}");
+      if (firstBrace > 0 || lastBrace < trimmed.length - 1) {
+        if (firstBrace !== -1 && lastBrace !== -1) trimmed = trimmed.slice(firstBrace, lastBrace + 1);
+      }
+      parsed = JSON.parse(trimmed);
+    } catch (e: any) {
+      throw new Error(`Wiki ingest: failed to parse Claude JSON response. First 300 chars: ${replyText.slice(0, 300)}`);
+    }
+
+    const written: string[] = [];
+    for (const pg of (parsed.pages || [])) {
+      if (!pg || typeof pg.path !== "string" || typeof pg.content !== "string") continue;
+      if (pg.path === WIKI_SCHEMA_FILE || pg.path === WIKI_INDEX_FILE || pg.path === WIKI_LOG_FILE) continue;
+      if (!pg.path.endsWith(".md")) continue;
+      try {
+        await writeWikiPage(pg.path, pg.content);
+        written.push(pg.path);
+      } catch (e: any) {
+        console.error(`Wiki ingest: failed to write ${pg.path}:`, e.message);
+      }
+    }
+
+    let indexNow = (await readWikiPage(WIKI_INDEX_FILE)) ?? DEFAULT_WIKI_INDEX;
+    for (const upd of (parsed.index_updates || [])) {
+      if (!upd || typeof upd.path !== "string" || typeof upd.summary !== "string") continue;
+      indexNow = upsertIndexEntry(indexNow, upd.path, upd.summary);
+    }
+    await writeWikiPage(WIKI_INDEX_FILE, indexNow);
+
+    const logEntry = typeof parsed.log_entry === "string" && parsed.log_entry.trim()
+      ? parsed.log_entry.trim()
+      : `ingest ${sourceRelPath}`;
+    await appendWikiLog(`ingest | ${sourceRelPath} | ${logEntry}`);
+
+    return { pages: written, log_entry: logEntry };
+  } finally {
+    pendingWikiIngest.delete(sourceRelPath);
+  }
+}
+
+async function lintWiki(): Promise<{ report: string }> {
+  const settings = await readSettings();
+  if (!settings.apiKey) throw new Error("No API key configured");
+  await ensureWikiScaffold();
+
+  const pageList = await listWikiPages();
+  if (pageList.length === 0) return { report: "Wiki is empty. Nothing to lint yet." };
+
+  const MAX_LINT_BYTES = 80000;
+  let budget = MAX_LINT_BYTES;
+  const bodies: string[] = [];
+  for (const pg of pageList) {
+    const b = (await readWikiPage(pg.path)) ?? "";
+    const block = `--- ${pg.path} ---\n${b}`;
+    if (block.length > budget) break;
+    bodies.push(block);
+    budget -= block.length;
+  }
+
+  const prompt = `You are auditing a Claude-maintained wiki for a Conan project. Produce a concise health-check report covering:
+
+1. Contradictions — claims on one page that conflict with another
+2. Stale or superseded claims — information that newer pages have revised
+3. Orphan pages — pages with no inbound links from other pages
+4. Missing pages — concepts referenced inline that don't have their own page yet
+5. Missing cross-references — pages that should link to each other but don't
+6. Questions to investigate — gaps in the wiki worth exploring next
+
+Return a markdown report. Reference pages by path. Be specific. No generic advice. If the wiki is healthy on a dimension, say so briefly.
+
+# Wiki pages
+${bodies.join("\n\n")}`;
+
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": settings.apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 2048,
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+  if (!res.ok) throw new Error(`Claude API error: ${res.status} ${await res.text()}`);
+  const data = (await res.json()) as any;
+  const report = (data.content || []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("") || "";
+  const firstLine = report.split("\n").find(l => l.trim()) || "(no report)";
+  await appendWikiLog(`lint | ${firstLine.replace(/^#+\s*/, "").slice(0, 140)}`);
+  return { report };
+}
+
 const server = Bun.serve({
   hostname: "127.0.0.1", // localhost only — not exposed to network
   port: PORT,
@@ -2951,6 +3322,60 @@ Use exact filenames from search results or the listing above.`;
       } catch (e: any) {
         return json({ error: e.message }, 500);
       }
+    }
+
+    // ── Wiki ──
+
+    if (path === "/api/wiki/scaffold" && req.method === "POST") {
+      try {
+        const r = await ensureWikiScaffold();
+        return json(r);
+      } catch (e: any) { return json({ error: e.message }, 500); }
+    }
+
+    if (path === "/api/wiki/pages" && req.method === "GET") {
+      try {
+        await ensureWikiScaffold();
+        const pages = await listWikiPages();
+        return json({ pages });
+      } catch (e: any) { return json({ error: e.message }, 500); }
+    }
+
+    if (path === "/api/wiki/page" && req.method === "GET") {
+      const p = url.searchParams.get("path");
+      if (!p) return json({ error: "path query param required" }, 400);
+      try {
+        const content = await readWikiPage(p);
+        if (content === null) return json({ error: "not found" }, 404);
+        return json({ path: p, content });
+      } catch (e: any) { return json({ error: e.message }, 400); }
+    }
+
+    if (path === "/api/wiki/page" && req.method === "PUT") {
+      const p = url.searchParams.get("path");
+      if (!p) return json({ error: "path query param required" }, 400);
+      try {
+        const body = (await req.json()) as { content: string };
+        if (typeof body.content !== "string") return json({ error: "content required" }, 400);
+        await writeWikiPage(p, body.content);
+        return json({ ok: true });
+      } catch (e: any) { return json({ error: e.message }, 400); }
+    }
+
+    if (path === "/api/wiki/ingest" && req.method === "POST") {
+      try {
+        const body = (await req.json()) as { sourcePath: string };
+        if (!body.sourcePath) return json({ error: "sourcePath required" }, 400);
+        const result = await ingestSourceToWiki(body.sourcePath);
+        return json(result);
+      } catch (e: any) { return json({ error: e.message }, 500); }
+    }
+
+    if (path === "/api/wiki/lint" && req.method === "POST") {
+      try {
+        const result = await lintWiki();
+        return json(result);
+      } catch (e: any) { return json({ error: e.message }, 500); }
     }
 
     return new Response("Not Found", { status: 404 });
