@@ -263,26 +263,6 @@ function renderRegionOverlay() {
         else if (nearL || nearR) cursor = 'ew-resize';
         el.style.cursor = cursor;
       });
-      // Right-click "Send to Chat" on region rects
-      el.addEventListener('contextmenu', (ev) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        const idx = parseInt(el.dataset.regionIdx, 10);
-        const file = onlyFiles()[currentIndex];
-        if (!file) return;
-        const comment = (file.comments || [])[idx];
-        if (!comment || !comment.region) return;
-        showContextMenu(ev.clientX, ev.clientY, [
-          { label: 'Send crop to Chat', icon: 'sparkle', action: () => {
-            addProjectAttachment(file.path, comment.region, `#${idx+1} crop`);
-            if (!chatOpen) toggleChat();
-          }},
-          { label: 'Send full image to Chat', icon: 'image', action: () => {
-            addProjectAttachment(file.path, null, file.name);
-            if (!chatOpen) toggleChat();
-          }},
-        ]);
-      });
     });
   }
 }

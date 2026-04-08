@@ -109,25 +109,9 @@ function toggleSummary() {
   const rail = document.getElementById('summary-siderail');
   const btn = document.getElementById('btn-toggle-summary');
   if (summaryVisible) {
-    // Instant swap if chat is open
-    if (chatOpen) {
-      const chatPanel = document.getElementById('chat-panel');
-      rail.style.transition = 'none';
-      chatPanel.style.transition = 'none';
-      closeChatInstant();
-      rail.classList.add('active');
-      document.body.classList.add('summary-open');
-      btn.style.display = 'none';
-      // Re-enable transitions next frame
-      requestAnimationFrame(() => {
-        rail.style.transition = '';
-        chatPanel.style.transition = '';
-      });
-    } else {
-      rail.classList.add('active');
-      document.body.classList.add('summary-open');
-      btn.style.display = 'none';
-    }
+    rail.classList.add('active');
+    document.body.classList.add('summary-open');
+    btn.style.display = 'none';
     loadSummary();
     loadVersionList();
   } else {

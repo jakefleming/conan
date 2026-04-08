@@ -58,20 +58,6 @@ let summaryVisible = false;
 let summaryCurrentVersion = null;
 let summaryTotalVersions = 0;
 
-// ── Chat Panel ──
-const CHAT_STORAGE_KEY = 'conan-chats';
-let chatOpen = false;
-let chatHistory = [];
-// Chat context is now automatic based on current view state
-let chatSending = false;
-let chatSessions = []; // [{id, title, messages, ts}]
-let activeChatId = null;
-
-// ── Chat Attachments ──
-let chatAttachments = []; // [{type:"project",path:"...",thumbUrl:"..."} or {type:"upload",data:"base64",mediaType:"...",name:"...",thumbUrl:"..."}]
-let sidebarAttachments = []; // same format as chatAttachments, for file-level sidebar
-
-// ── Chat voice input ──
-let chatRecognition = null;
-let chatIsRecording = false;
-let chatTextBeforeRecording = '';
+// ── File Attachments (sidebar comment input) ──
+// [{type:"project",path:"...",thumbUrl:"..."} or {type:"upload",data:"base64",mediaType:"...",name:"...",thumbUrl:"..."}]
+let sidebarAttachments = [];

@@ -1,9 +1,5 @@
 // utils.js — extracted from index.html
 
-// Forward declaration stubs for functions defined in later-loading modules
-// These get overwritten when the real module loads
-function updateChatFabVisibility() {} // defined in chat.js
-
 // Helper to read CSS custom properties (for theme-aware JS colors)
 function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();

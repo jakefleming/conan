@@ -37,18 +37,6 @@ Your session folder should contain the images, PDFs, or documents you want to an
 - **URL hash routing** — directory state persists across browser back/forward
 - **Per-directory data** — each subdirectory has its own `.context.json`, `SUMMARY.md`, thumbnails, and audio
 
-### Chat
-- **Persistent chat panel** on the right side with localStorage-backed session history
-- **Search-first architecture** — Claude uses FTS5 full-text search to find relevant content across all directories instead of loading everything upfront
-- **Multi-turn tool use** — Claude can search, reason, and refine across up to 6 rounds per message
-- **File attachments** — attach full images or cropped annotation regions to messages
-- **Voice input** — mic button for speech-to-text in both file chat and folder chat
-- **Smart file cards** — Claude responds with visual file collections (thumbnails, descriptions, zip download)
-- **Copy chat** — copy all file comments as a markdown transcript from the copy dropdown
-- **Right-click "Send to Chat"** on grid items, comments, and region overlays
-- **Drag-to-chat** — drag images from the grid into the chat panel, or drop external files
-- **File picker** shows annotation crops alongside full images for selection
-
 ### Summary Generation
 - **Multimodal summaries** — includes thumbnails from `.thumbs/` for visual context alongside annotations
 - **Per-directory summaries** scoped to the files in the current folder
@@ -67,7 +55,6 @@ Your session folder should contain the images, PDFs, or documents you want to an
 - **Audio file migration** — `.audio_*` files are renamed alongside their parent file
 - **Comment attachment updates** — cross-references in other files' comments are updated when a file moves
 - **In-app rename** — rename button in the file detail sidebar header
-- **Resilient chat links** — old file references in chat resolve via the alias table
 
 ### Export
 - **ML export** — consolidated export to JSONL + COCO detection format with deterministic filenames
@@ -192,13 +179,6 @@ your-session-folder/
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/api/export` | Export annotated regions as zip (crops, originals, JSONL, COCO) |
-
-### Chat
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/chat` | Send a message to Claude with file/region attachments |
-| `POST` | `/api/download-files` | Download a set of files as a zip |
 
 ### Media
 

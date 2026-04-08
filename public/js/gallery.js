@@ -32,7 +32,6 @@ function enterGallery(onRendered) {
   document.getElementById('breadcrumb-bar').style.display = 'none';
   document.getElementById('orphan-banner').classList.remove('active');
   document.getElementById('btn-toggle-summary').style.display = 'none';
-  updateChatFabVisibility();
   // Push file state for back button
   const file = onlyFiles()[currentIndex];
   if (file && !_navFromPopstate) {
@@ -54,7 +53,6 @@ function exitGallery(fromPopstate) {
   document.getElementById('gallery').classList.remove('active');
   document.getElementById('breadcrumb-bar').style.display = '';
   document.getElementById('btn-toggle-summary').style.display = '';
-  updateChatFabVisibility();
   if (!fromPopstate && !_navFromPopstate) {
     navPushState(currentDir, null, 0);
   }
@@ -330,39 +328,6 @@ function renderComments(filename, fileCtx) {
       focusedCommentIndex = null;
       highlightSidebarComment(null);
       renderRegionOverlay();
-    });
-  });
-
-  // Right-click "Send to Chat" on comments with regions
-  list.querySelectorAll('.comment[data-region]').forEach(el => {
-    el.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      const idx = parseInt(el.id.split('-').pop(), 10);
-      const comment = fileCtx.comments[idx];
-      if (!comment || !comment.region) return;
-      showContextMenu(e.clientX, e.clientY, [
-        { label: 'Send crop to Chat', icon: 'sparkle', action: () => {
-          addProjectAttachment(filename, comment.region, `#${idx+1} crop`);
-          if (!chatOpen) toggleChat();
-        }},
-        { label: 'Send full image to Chat', icon: 'image', action: () => {
-          addProjectAttachment(filename, null, filename.split('/').pop());
-          if (!chatOpen) toggleChat();
-        }},
-      ]);
-    });
-  });
-
-  // Right-click "Send to Chat" on comments without regions (send full image)
-  list.querySelectorAll('.comment:not([data-region])').forEach(el => {
-    el.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      showContextMenu(e.clientX, e.clientY, [
-        { label: 'Send image to Chat', icon: 'image', action: () => {
-          addProjectAttachment(filename, null, filename.split('/').pop());
-          if (!chatOpen) toggleChat();
-        }},
-      ]);
     });
   });
 
