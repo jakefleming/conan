@@ -31,7 +31,6 @@ function enterGallery(onRendered) {
   document.getElementById('gallery').classList.add('active');
   document.getElementById('breadcrumb-bar').style.display = 'none';
   document.getElementById('orphan-banner').classList.remove('active');
-  document.getElementById('btn-toggle-summary').style.display = 'none';
   // Push file state for back button
   const file = onlyFiles()[currentIndex];
   if (file && !_navFromPopstate) {
@@ -52,7 +51,6 @@ function exitGallery(fromPopstate) {
   document.getElementById('overview-container').classList.remove('hidden');
   document.getElementById('gallery').classList.remove('active');
   document.getElementById('breadcrumb-bar').style.display = '';
-  document.getElementById('btn-toggle-summary').style.display = '';
   if (!fromPopstate && !_navFromPopstate) {
     navPushState(currentDir, null, 0);
   }

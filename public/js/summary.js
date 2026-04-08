@@ -101,23 +101,19 @@ function closeSummaryInstant() {
   const rail = document.getElementById('summary-siderail');
   rail.classList.remove('active');
   document.body.classList.remove('summary-open');
-  document.getElementById('btn-toggle-summary').style.display = '';
 }
 
 function toggleSummary() {
   summaryVisible = !summaryVisible;
   const rail = document.getElementById('summary-siderail');
-  const btn = document.getElementById('btn-toggle-summary');
   if (summaryVisible) {
     rail.classList.add('active');
     document.body.classList.add('summary-open');
-    btn.style.display = 'none';
     loadSummary();
     loadVersionList();
   } else {
     rail.classList.remove('active');
     document.body.classList.remove('summary-open');
-    btn.style.display = '';
   }
 }
 
@@ -263,7 +259,8 @@ async function loadVersionList() {
   } catch (e) { /* ignore */ }
 }
 
-document.getElementById('btn-toggle-summary').addEventListener('click', toggleSummary);
+// Topbar entry point removed — summary feature now reachable only via API
+// (POST /api/summary/generate) or the keyboard shortcut wiring elsewhere.
 document.getElementById('btn-summary-close').addEventListener('click', toggleSummary);
 document.getElementById('btn-summary-edit').addEventListener('click', toggleSummaryEdit);
 document.getElementById('btn-summary-copy').addEventListener('click', copySummary);

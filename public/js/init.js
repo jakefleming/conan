@@ -73,7 +73,6 @@ document.addEventListener('keydown', (e) => {
 
   if (!galleryMode) {
     if (e.key === 'Enter') { startAddContext(); e.preventDefault(); }
-    if (e.key === 'm' || e.key === 'M') { toggleSummary(); e.preventDefault(); }
     return;
   }
 
