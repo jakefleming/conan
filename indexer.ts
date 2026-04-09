@@ -8,11 +8,11 @@
 import { Database } from "bun:sqlite";
 import { readdir, readFile, stat, watch } from "fs/promises";
 import { join, extname, basename, dirname } from "path";
-import { existsSync } from "fs";
+import { existsSync, mkdirSync, renameSync } from "fs";
 import { createHash } from "crypto";
 import * as XLSX from "xlsx";
 
-const HIDDEN_DIRS = new Set([".thumbs", ".git", ".DS_Store", ".attachments", "node_modules", "__pycache__", ".venv", "venv", ".next", "dist", "build"]);
+const HIDDEN_DIRS = new Set([".thumbs", ".git", ".DS_Store", ".attachments", "node_modules", "__pycache__", ".venv", "venv", ".next", "dist", "build", ".conan.noindex"]);
 const CONTEXT_FILE = ".context.json";
 const TEXT_EXTENSIONS = new Set([
   ".md", ".txt", ".json", ".csv", ".tsv", ".xml", ".yaml", ".yml",
@@ -162,9 +162,43 @@ export class ConanIndexer {
   private cleanupInterval: any = null;
   onFileMoved: ((oldPath: string, newPath: string, hash: string) => Promise<void>) | null = null;
 
+  /**
+   * Resolve the DB path for a project. The DB (plus its WAL/SHM sidecars)
+   * lives inside a `.conan.noindex/` folder so macOS Spotlight skips it
+   * entirely — Spotlight treats any folder whose name ends in `.noindex`
+   * as excluded from indexing. Without this, Spotlight's mdworker races
+   * with SQLite writes on macOS and produces SQLITE_IOERR_VNODE errors
+   * mid-indexing. Also migrates legacy `<root>/.conan.db` (+ WAL/SHM/
+   * journal siblings) into the new location on first boot.
+   */
+  private static resolveDbPath(projectRoot: string): string {
+    const dbDir = join(projectRoot, ".conan.noindex");
+    if (!existsSync(dbDir)) {
+      try { mkdirSync(dbDir, { recursive: true }); } catch {}
+    }
+    const newDbPath = join(dbDir, "conan.db");
+    const legacyDbPath = join(projectRoot, ".conan.db");
+    if (existsSync(legacyDbPath) && !existsSync(newDbPath)) {
+      try {
+        renameSync(legacyDbPath, newDbPath);
+        for (const sfx of ["-wal", "-shm", "-journal"]) {
+          const oldSfx = legacyDbPath + sfx;
+          const newSfx = newDbPath + sfx;
+          if (existsSync(oldSfx)) {
+            try { renameSync(oldSfx, newSfx); } catch {}
+          }
+        }
+        console.log(`[indexer] migrated legacy .conan.db → .conan.noindex/conan.db`);
+      } catch (e: any) {
+        console.error(`[indexer] failed to migrate legacy .conan.db:`, e.message || e);
+      }
+    }
+    return newDbPath;
+  }
+
   constructor(projectRoot: string) {
     this.projectRoot = projectRoot;
-    const dbPath = join(projectRoot, ".conan.db");
+    const dbPath = ConanIndexer.resolveDbPath(projectRoot);
     this.db = new Database(dbPath);
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
@@ -176,7 +210,7 @@ export class ConanIndexer {
     this.stopWatcher();
     this.db.close();
     this.projectRoot = projectRoot;
-    const dbPath = join(projectRoot, ".conan.db");
+    const dbPath = ConanIndexer.resolveDbPath(projectRoot);
     this.db = new Database(dbPath);
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");

@@ -32,7 +32,7 @@ const MIME_TYPES: Record<string, string> = {
 
 const CONTEXT_FILE = ".context.json";
 const SETTINGS_FILE = ".annotator-settings.json";
-const HIDDEN_DIRS = new Set([".thumbs", ".git", ".DS_Store", ".attachments", "wiki"]);
+const HIDDEN_DIRS = new Set([".thumbs", ".git", ".DS_Store", ".attachments", ".conan.noindex", "wiki"]);
 const PORT = 3333;
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif", ".svg"]);
