@@ -8,7 +8,8 @@
 import { Database } from "bun:sqlite";
 import { readdir, readFile, stat, watch } from "fs/promises";
 import { join, extname, basename, dirname } from "path";
-import { existsSync, mkdirSync, renameSync } from "fs";
+import { existsSync, mkdirSync, renameSync, rmdirSync } from "fs";
+import { homedir } from "os";
 import { createHash } from "crypto";
 import * as XLSX from "xlsx";
 
@@ -163,36 +164,87 @@ export class ConanIndexer {
   onFileMoved: ((oldPath: string, newPath: string, hash: string) => Promise<void>) | null = null;
 
   /**
-   * Resolve the DB path for a project. The DB (plus its WAL/SHM sidecars)
-   * lives inside a `.conan.noindex/` folder so macOS Spotlight skips it
-   * entirely — Spotlight treats any folder whose name ends in `.noindex`
-   * as excluded from indexing. Without this, Spotlight's mdworker races
-   * with SQLite writes on macOS and produces SQLITE_IOERR_VNODE errors
-   * mid-indexing. Also migrates legacy `<root>/.conan.db` (+ WAL/SHM/
-   * journal siblings) into the new location on first boot.
+   * Resolve the SQLite DB path for a project. The DB (plus its WAL/SHM
+   * sidecars) lives in the platform app-support directory, **outside**
+   * the target folder entirely. This is important because anything
+   * watching/mounting the target folder can race with SQLite writes:
+   *  - macOS Spotlight's mdworker
+   *  - Third-party apps scanning the folder (Metatron, meeting tools, etc.)
+   *  - VM bind mounts crossing virtiofs (OrbStack/Docker/Colima/Lima via
+   *    Apple's Virtualization.framework, which holds FDs open on every
+   *    file the guest reads and produces SQLITE_IOERR_VNODE races)
+   *
+   * App-support paths are:
+   *  - macOS:   ~/Library/Application Support/conan/<key>/conan.db
+   *  - Linux:   $XDG_DATA_HOME/conan/<key>/conan.db  (fallback: ~/.local/share)
+   *  - Windows: %APPDATA%/conan/<key>/conan.db
+   *
+   * <key> is "<basename>-<first-8-of-sha256(projectRoot)>" so multiple
+   * Conan projects on the same machine get distinct databases and the
+   * folder is human-debuggable.
+   *
+   * Migrates from either legacy location on first boot:
+   *   <root>/.conan.db               (original in-folder)
+   *   <root>/.conan.noindex/conan.db (yesterday's Spotlight fix)
+   * Cleans up an empty .conan.noindex directory afterward.
    */
   private static resolveDbPath(projectRoot: string): string {
-    const dbDir = join(projectRoot, ".conan.noindex");
-    if (!existsSync(dbDir)) {
-      try { mkdirSync(dbDir, { recursive: true }); } catch {}
+    // Build a stable, human-debuggable key for this project.
+    const safeBase = basename(projectRoot).toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "target";
+    const pathHash = createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);
+    const key = `${safeBase}-${pathHash}`;
+
+    // Platform-specific app-support base directory.
+    const home = homedir();
+    let appDir: string;
+    if (process.platform === "darwin") {
+      appDir = join(home, "Library", "Application Support", "conan", key);
+    } else if (process.platform === "win32") {
+      const roaming = process.env.APPDATA || join(home, "AppData", "Roaming");
+      appDir = join(roaming, "conan", key);
+    } else {
+      const xdg = process.env.XDG_DATA_HOME || join(home, ".local", "share");
+      appDir = join(xdg, "conan", key);
     }
-    const newDbPath = join(dbDir, "conan.db");
-    const legacyDbPath = join(projectRoot, ".conan.db");
-    if (existsSync(legacyDbPath) && !existsSync(newDbPath)) {
+
+    try { mkdirSync(appDir, { recursive: true }); } catch {}
+
+    const newDbPath = join(appDir, "conan.db");
+
+    // If the new DB already exists, nothing to migrate.
+    if (existsSync(newDbPath)) return newDbPath;
+
+    // Chained migration: prefer the newer in-folder location if present.
+    const noindexDir = join(projectRoot, ".conan.noindex");
+    const noindexDb = join(noindexDir, "conan.db");
+    const legacyDb = join(projectRoot, ".conan.db");
+
+    const migrate = (from: string): boolean => {
+      if (!existsSync(from)) return false;
       try {
-        renameSync(legacyDbPath, newDbPath);
+        renameSync(from, newDbPath);
         for (const sfx of ["-wal", "-shm", "-journal"]) {
-          const oldSfx = legacyDbPath + sfx;
+          const oldSfx = from + sfx;
           const newSfx = newDbPath + sfx;
           if (existsSync(oldSfx)) {
             try { renameSync(oldSfx, newSfx); } catch {}
           }
         }
-        console.log(`[indexer] migrated legacy .conan.db → .conan.noindex/conan.db`);
+        console.log(`[indexer] migrated ${from} → ${newDbPath}`);
+        return true;
       } catch (e: any) {
-        console.error(`[indexer] failed to migrate legacy .conan.db:`, e.message || e);
+        console.error(`[indexer] failed to migrate ${from}:`, e.message || e);
+        return false;
       }
+    };
+
+    if (migrate(noindexDb)) {
+      // Clean up the now-empty .conan.noindex dir if possible
+      try { rmdirSync(noindexDir); } catch {}
+    } else {
+      migrate(legacyDb);
     }
+
     return newDbPath;
   }
 
