@@ -56,10 +56,11 @@
   });
 })();
 
-// ── MCP config copy button ──
-// Fetches a paste-ready claude_desktop_config.json snippet for the current
-// target folder and copies it to the clipboard. Designed for pasting into
-// Claude Desktop's MCP config so the desktop app can cowork on the wiki.
+// ── MCP install command copy button ──
+// Fetches a ready-to-run shell command that merges a filesystem MCP server
+// entry (pointing at the current Conan target folder) into Claude Desktop's
+// config file, and copies it to the clipboard. Paste it in a terminal,
+// restart Claude Desktop, and the desktop app can cowork on the wiki.
 (function () {
   const btn = document.getElementById('btn-mcp-copy');
   if (!btn) return;
@@ -68,12 +69,12 @@
     try {
       const res = await fetch('/api/mcp/config');
       if (!res.ok) {
-        showToast('Failed to fetch MCP config', 'info', 5000);
+        showToast('Failed to fetch MCP install command', 'info', 5000);
         return;
       }
-      const jsonText = await res.text();
-      await navigator.clipboard.writeText(jsonText);
-      showToast('MCP config copied — paste into Claude Desktop settings', 'success', 5000);
+      const command = await res.text();
+      await navigator.clipboard.writeText(command);
+      showToast('Install command copied — paste in a terminal, then restart Claude Desktop', 'success', 6000);
     } catch (e) {
       showToast('Copy failed: ' + (e.message || e), 'info', 5000);
     }

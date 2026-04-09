@@ -2788,30 +2788,47 @@ Return ONLY your description, no labels or prefixes.`,
       } catch (e: any) { return json({ error: e.message }, 500); }
     }
 
-    // ── MCP config generator for Claude Desktop ──
-    // Returns a paste-ready claude_desktop_config.json snippet that wires
-    // the filesystem MCP server to the current target folder. The server
-    // name is suffixed with the folder basename so multiple Conan projects
-    // can coexist in a single Claude Desktop config.
+    // ── MCP install command for Claude Desktop ──
+    // Returns a single-line shell command the user can paste into their
+    // terminal. The command uses bun -e to merge a filesystem MCP server
+    // entry into Claude Desktop's config file, preserving any existing
+    // mcpServers. Cross-platform: picks the right config path for
+    // macOS / Windows / Linux at runtime.
     if (path === "/api/mcp/config" && req.method === "GET") {
       try {
         const base = basename(resolvedFolder) || "target";
         const safeName = base.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "target";
         const serverName = `conan-${safeName}`;
-        const config = {
-          mcpServers: {
-            [serverName]: {
-              command: "npx",
-              args: [
-                "-y",
-                "@modelcontextprotocol/server-filesystem",
-                resolvedFolder,
-              ],
-            },
-          },
+        const serverEntry = {
+          command: "npx",
+          args: [
+            "-y",
+            "@modelcontextprotocol/server-filesystem",
+            resolvedFolder,
+          ],
         };
-        return new Response(JSON.stringify(config, null, 2), {
-          headers: { "Content-Type": "application/json" },
+        // JS that merges the entry into Claude Desktop's config file.
+        // Picks the platform-specific config path at runtime.
+        const jsCode =
+          `const fs=require("fs"),path=require("path"),os=require("os");` +
+          `const cfg=process.platform==="darwin"` +
+          `?path.join(os.homedir(),"Library/Application Support/Claude/claude_desktop_config.json")` +
+          `:process.platform==="win32"` +
+          `?path.join(process.env.APPDATA||"","Claude","claude_desktop_config.json")` +
+          `:path.join(os.homedir(),".config","Claude","claude_desktop_config.json");` +
+          `let d={};try{d=JSON.parse(fs.readFileSync(cfg,"utf8"))}catch(e){}` +
+          `d.mcpServers=d.mcpServers||{};` +
+          `d.mcpServers[${JSON.stringify(serverName)}]=${JSON.stringify(serverEntry)};` +
+          `fs.mkdirSync(path.dirname(cfg),{recursive:true});` +
+          `fs.writeFileSync(cfg,JSON.stringify(d,null,2));` +
+          `console.log("Added "+${JSON.stringify(serverName)}+" to "+cfg);` +
+          `console.log("Restart Claude Desktop to activate.")`;
+        // POSIX single-quote escape so any weird chars in paths/names
+        // (including literal single quotes) survive the shell.
+        const shellQuoted = "'" + jsCode.replace(/'/g, "'\\''") + "'";
+        const command = `bun -e ${shellQuoted}`;
+        return new Response(command, {
+          headers: { "Content-Type": "text/plain" },
         });
       } catch (e: any) {
         return json({ error: e.message }, 500);
