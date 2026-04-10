@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "conan",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": ["run", "server.ts", "/Users/jakefleming/Development/life-optimization/brain"],
+      "port": 3333
+    }
+  ]
+}
